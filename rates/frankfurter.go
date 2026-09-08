@@ -46,7 +46,7 @@ func (f *Frankfurter) get(ctx context.Context, url string, dst any) error {
 
 func (f *Frankfurter) Fetch(ctx context.Context) (*Table, error) {
     names := map[string]string{"EUR": "Euro"}
-    // /currencies — некритичный справочник имён (fallback добирают другие адаптеры)
+    // /currencies — некритичный справочник имён
     var cur map[string]string
     if err := f.get(ctx, f.base+"/currencies", &cur); err == nil {
         for k, v := range cur {
@@ -67,7 +67,7 @@ func (f *Frankfurter) Fetch(ctx context.Context) (*Table, error) {
         }
     }
 
-    // Попытка получить «вчерашний» снимок для стрелок тренда.
+    // «Вчерашний» снимок для стрелок тренда.
     yday := time.Now().UTC().AddDate(0, 0, -1).Format("2006-01-02")
     var hist ffDoc
     if err := f.get(ctx, f.base+"/"+yday, &hist); err == nil &&
@@ -86,7 +86,8 @@ func (f *Frankfurter) Fetch(ctx context.Context) (*Table, error) {
     }
 
     return &Table{
-        FetchedAt: time.Now().UTC(), // момент успешного запроса
+        FetchedAt: time.Now().UTC(),
+        QuoteDate: latest.Date,
         Source:    f.Name(),
         Anchor:    anchor,
         Points:    points,

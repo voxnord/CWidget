@@ -5,18 +5,23 @@ import "time"
 // RatePoint — стоимость 1 единицы валюты, выраженная в якорной валюте.
 type RatePoint struct {
     Price   float64 `json:"price"`
-    HasPrev bool    `json:"has_prev"`          // вчераший курс доступен?
-    Prev    float64 `json:"prev,omitempty"`    // курс вчера (в тех же якорях)
+    HasPrev bool    `json:"has_prev"`       // вчераший курс доступен?
+    Prev    float64 `json:"prev,omitempty"` // курс вчера (в тех же якорях)
 }
 
 // Table — снимок курсов одного провайдера на момент Fetch().
-// После публикации таблица НЕ мутируется — это позволяет безопасно отдавать её в UI и кэш.
+// После публикации таблица НЕ мутируется — это позволяет безопасно
+// отдавать её в UI и в дисковый кэш.
 type Table struct {
-    FetchedAt time.Time          `json:"fetched_at"`
-    Source    string             `json:"source"`    // имя провайдера
-    Anchor    string             `json:"anchor"`    // например "RUB" или "EUR"
+    FetchedAt time.Time `json:"fetched_at"`
+    // QuoteDate — дата котировок источника ("2006-01-02"), если API её сообщает.
+    // Для ЦБ РФ это дата официального курса (меняется раз в день!).
+    // FetchedAt при этом — момент нашего успешного запроса.
+    QuoteDate string               `json:"quote_date,omitempty"`
+    Source    string               `json:"source"` // имя провайдера
+    Anchor    string               `json:"anchor"` // например "RUB" или "EUR"
     Points    map[string]RatePoint `json:"points"`
-    Names     map[string]string  `json:"names,omitempty"` // код → человекочитаемое имя
+    Names     map[string]string    `json:"names,omitempty"` // код → человекочитаемое имя
 }
 
 // Has — все перечисленные коды есть в таблице?

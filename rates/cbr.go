@@ -66,10 +66,16 @@ func (c *CBR) Fetch(ctx context.Context) (*Table, error) {
         points[v.CharCode] = p
         names[v.CharCode] = v.Name
     }
+
+    quoteDate := ""
+    if !doc.Date.IsZero() {
+        quoteDate = doc.Date.Format("2006-01-02")
+    }
     return &Table{
-        // ВАЖНО: время УСПЕШНОГО ЗАПРОСА, а не Date котировок ЦБ
-        // (котировки меняются раз в день — метка не менялась бы весь день).
+        // FetchedAt = момент успешного запроса (для метки «обн. 14:30»),
+        // QuoteDate = дата официальных котировок ЦБ (меняется раз в день).
         FetchedAt: time.Now().UTC(),
+        QuoteDate: quoteDate,
         Source:    c.Name(),
         Anchor:    "RUB",
         Points:    points,

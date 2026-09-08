@@ -7,25 +7,19 @@ const S = {
   table: null, names: {},
 };
 
-/* ---------------- Popup-поведение: скрытие при потере фокуса ----------------
- * Проблема, которую решаем: сразу после клика по пункту меню трея Windows
- * на мгновение возвращает фокус панели задач — наивный blur-обработчик
- * прятал окно через долю секунды после показа.
- * Решение: grace-период после показа/фокуса + повторная проверка hasFocus(). */
+/* ---------------- Popup-поведение: скрытие при потере фокуса ---------------- */
 let hideGuardUntil = 0;
 const armHideGuard = (ms = 700) => { hideGuardUntil = Date.now() + ms; };
 
 window.addEventListener("blur", () => {
   setTimeout(() => {
-    if (Date.now() < hideGuardUntil) return; // только что открыли — игнорируем
-    if (document.hasFocus()) return;         // фокус вернулся — не прячем
+    if (Date.now() < hideGuardUntil) return;
+    if (document.hasFocus()) return;
     try { window.runtime.WindowHide(); } catch {}
   }, 120);
 });
 window.addEventListener("focus", () => armHideGuard(300));
 
-/* Показ окна через бэкенд: он задаёт размер под режим, ставит окно
- * в правый нижний угол над панелью задач и забирает фокус. */
 function showMode(mode) {
   try { window.go.app.App.ShowMode(mode); } catch (e) { console.error(e); }
 }
@@ -41,7 +35,15 @@ function parseAmt(s) {
   const v = parseFloat(String(s).replace(/\s/g, "").replace(",", "."));
   return isFinite(v) ? v : NaN;
 }
-const BLANK = "\u2800"; // braille-blank: сохраняет ширину, ничего не рисует
+const BLANK = "\u2800";
+
+function fmtTime(d) {
+  return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+}
+function fmtQuoteDate(iso) { // "2026-09-08" → "08.09"
+  if (!iso || iso.length < 10) return null;
+  return `${iso.slice(8, 10)}.${iso.slice(5, 7)}`;
+}
 
 /* ------------------------------ расчёты --------------------------------- */
 function pair(a, b) {
@@ -55,7 +57,7 @@ function pair(a, b) {
   return { cur, prev, hasPrev };
 }
 function trendDir(calc) {
-  if (!calc || !calc.hasPrev) return null;            // ← blank
+  if (!calc || !calc.hasPrev) return null;
   const eps = Math.max(Math.abs(calc.prev), Math.abs(calc.cur)) * 1e-7;
   const d = calc.cur - calc.prev;
   if (Math.abs(d) <= eps) return null;
@@ -105,15 +107,58 @@ function fillSelect(sel, value) {
 function applyUpdate(p) {
   if (p?.table) S.table = p.table;
   if (p?.names) S.names = p.names;
-  if (p?.table?.fetched_at) {
-    const t = new Date(p.table.fetched_at);
-    $("upd-badge").textContent = `Обновлено в ${String(t.getHours()).padStart(2,"0")}:${String(t.getMinutes()).padStart(2,"0")}`;
-    $("upd-badge").classList.remove("err");
+  const badge = $("upd-badge");
+  if (S.table?.fetched_at) {
+    let txt = `обн. ${fmtTime(new Date(S.table.fetched_at))}`;
+    const qd = fmtQuoteDate(S.table.quote_date);
+    if (qd) txt += ` · кот. ${qd}`; // дата котировок источника (ЦБ меняет их раз в день)
+    badge.textContent = txt;
+    badge.classList.remove("err");
   }
   $("src-badge").textContent = S.table?.source ?? "—";
   fillSelect($("sel-left"), S.left);
   fillSelect($("sel-right"), S.right);
   recalc();
+}
+
+/* ---------------------- кнопка «Обновить» (окно) ------------------------- */
+let coolTimer = null;
+let cooling = false;
+
+function setRefreshBusy(busy) {
+  const b = $("btn-refresh");
+  if (busy) {
+    clearInterval(coolTimer); cooling = false;
+    b.disabled = true; b.classList.remove("cool");
+    b.classList.add("spin"); b.textContent = "⟳"; b.title = "Обновление…";
+  } else {
+    b.classList.remove("spin");
+    if (!cooling) { b.disabled = false; b.textContent = "⟳"; b.title = "Обновить курс"; }
+  }
+}
+function startCooldownUI(sec) {
+  const b = $("btn-refresh");
+  clearInterval(coolTimer);
+  if (!sec || sec <= 0) { endCooldownUI(); return; }
+  cooling = true;
+  b.disabled = true;
+  b.classList.add("cool");
+  const tick = () => {
+    if (sec <= 0) { endCooldownUI(); return; }
+    b.textContent = String(sec);
+    b.title = `Повтор через ${sec} с`;
+    sec--;
+  };
+  tick();
+  coolTimer = setInterval(tick, 1000);
+}
+function endCooldownUI() {
+  clearInterval(coolTimer); cooling = false;
+  const b = $("btn-refresh");
+  b.classList.remove("cool", "spin");
+  b.disabled = false;
+  b.textContent = "⟳";
+  b.title = "Обновить курс";
 }
 
 /* --------------------------- переключение режимов ------------------------ */
@@ -123,14 +168,20 @@ function setMode(mode) { // только DOM; размер/позиция/пок
   if (mode === "main") recalc();
 }
 
-async function openSettings() {
+/* Заполнение настроек — вызывается при ЛЮБОМ способе их открытия
+ * (и кнопкой-шестерёнкой, и пунктом меню трея). */
+async function populateSettings() {
   const st = await window.go.app.App.GetInitState();
-  S.names = Object.assign({}, st.update.names, S.names);
+  S.names = Object.assign({}, st.update.names ?? {}, S.names);
   fillSelect($("set-left"), st.config.base_currency);
   fillSelect($("set-right"), st.config.target_currency);
   $("set-interval").value = String(st.config.refresh_interval_minutes);
   $("set-autostart").setAttribute("aria-checked", String(st.autostart_enabled));
   $("ver").textContent = "v0.1.0";
+}
+
+async function openSettings() {
+  await populateSettings();
   showMode("settings");
 }
 
@@ -145,7 +196,10 @@ async function openSettings() {
  $("btn-back").addEventListener("click", () => showMode("main"));
 
 /* команды режима приходят с бэкенда (трей → ShowMode → событие) */
-window.runtime?.EventsOn?.("ui:mode", m => setMode(m));
+window.runtime?.EventsOn?.("ui:mode", m => {
+  setMode(m);
+  if (m === "settings") populateSettings(); // открыто из трея — заполняем здесь
+});
 
 /* события от бэкенда */
 window.runtime?.EventsOn?.("rates:update", p => applyUpdate(p));
@@ -154,6 +208,8 @@ window.runtime?.EventsOn?.("rates:error", () => {
   b.textContent = "нет связи";
   b.classList.add("err");
 });
+window.runtime?.EventsOn?.("refresh:busy", b => setRefreshBusy(!!b));
+window.runtime?.EventsOn?.("refresh:cooldown", s => startCooldownUI(s | 0));
 window.runtime?.EventsOn?.("autostart:changed", on => {
   $("set-autostart").setAttribute("aria-checked", String(!!on));
 });
@@ -193,6 +249,8 @@ document.querySelectorAll(".tab").forEach(btn => btn.addEventListener("click", (
     S.names = st.update.names ?? {};
     S.left = st.config.base_currency; S.right = st.config.target_currency;
     applyUpdate(st.update);
-    setMode("main"); // окно остаётся скрытым до клика по трее
+    setRefreshBusy(false);
+    startCooldownUI(st.cooldown_sec | 0); // если приложение перезапущено в кулдауне
+    setMode("main");
   } catch (e) { console.error("init:", e); }
 })();

@@ -35,6 +35,7 @@ type ratesUpdate struct {
 type InitPayload struct {
     Config      config.Config `json:"config"`
     AutoEnabled bool          `json:"autostart_enabled"`
+    CooldownSec int           `json:"cooldown_sec"` // остаток кулдауна обновления
     Update      ratesUpdate   `json:"update"`
 }
 
@@ -45,8 +46,9 @@ type App struct {
     ratesM *rates.Manager
     trayB  TrayBridge
 
-    exiting atomic.Bool
-    busy    atomic.Bool
+    exiting      atomic.Bool
+    busy         atomic.Bool
+    cooldownUntil atomic.Int64 // unix-время окончания кулдауна
 
     stopMu sync.Mutex
     stopCh chan struct{}
@@ -92,7 +94,7 @@ func (a *App) ShowMode(mode string) {
     popup.MoveNearTray(WindowTitle) // правый нижний угол, над панелью задач
     runtime.WindowUnminimise(a.ctx)
     runtime.WindowShow(a.ctx)
-    popup.FocusWindow(WindowTitle)
+    popup.FocusWindow(WindowTitle) // гарантированная активация окна
     runtime.EventsEmit(a.ctx, "ui:mode", mode)
 }
 
@@ -109,27 +111,49 @@ func (a *App) Quit() {
 
 /* -------------------------- обновление курсов --------------------------- */
 
-func (a *App) ManualRefresh() { // из трея и из UI
+// ManualRefresh — принудительное обновление по кнопке (трей или окно).
+func (a *App) ManualRefresh() {
     go a.BackgroundRefresh(true)
 }
 
-// BackgroundRefresh идёт в сеть, публикует событие и синхронизирует трей.
-// manual=true → после завершения включается минутный кулдаун кнопки.
+// BackgroundRefresh: manual=true → после завершения включается минутный кулдаун
+// (трей + кнопка в окне). Автообновление по таймеру кулдаун не включает.
 func (a *App) BackgroundRefresh(manual bool) {
     if !a.busy.CompareAndSwap(false, true) {
         return // защита от спама кнопкой
     }
     defer a.busy.Store(false)
+
+    a.emitBusy(true)
     if a.trayB != nil {
         a.trayB.SetBusy(true)
     }
     tbl, err := a.ratesM.TryRefresh(context.Background())
-    a.publish(tbl, err) // сначала публикуем (обновит [HH:MM] на кнопке)
+    a.publish(tbl, err)
     if a.trayB != nil {
         a.trayB.SetBusy(false)
-        if manual {
-            a.trayB.Cooldown(time.Minute) // кулдаун только для ручных нажатий
-        }
+    }
+    a.emitBusy(false)
+
+    if manual {
+        a.startCooldown(time.Minute)
+    }
+}
+
+func (a *App) emitBusy(b bool) {
+    if a.ctx != nil {
+        runtime.EventsEmit(a.ctx, "refresh:busy", b)
+    }
+}
+
+func (a *App) startCooldown(d time.Duration) {
+    until := time.Now().Add(d)
+    a.cooldownUntil.Store(until.Unix())
+    if a.trayB != nil {
+        a.trayB.Cooldown(d)
+    }
+    if a.ctx != nil {
+        runtime.EventsEmit(a.ctx, "refresh:cooldown", int(time.Until(until).Seconds())+1)
     }
 }
 
@@ -198,9 +222,16 @@ func (a *App) GetInitState() InitPayload {
     cfgCopy := *a.cfg
     a.cfgMu.Unlock()
     tbl, _ := a.ratesM.Current()
+
+    cooldownSec := 0
+    if rem := time.Until(time.Unix(a.cooldownUntil.Load(), 0)); rem > 0 {
+        cooldownSec = int(rem.Seconds()) + 1
+    }
+
     return InitPayload{
         Config:      cfgCopy,
         AutoEnabled: autostartEnabled(),
+        CooldownSec: cooldownSec,
         Update:      ratesUpdate{Table: tbl, Names: a.ratesM.Names()},
     }
 }
@@ -230,7 +261,7 @@ func (a *App) SetDefaults(base, target string, minutes int) error {
     }
     if intervalChanged {
         a.stopTicker()
-        a.startTicker()
+        a.startTicker() // первый тик — через новый интервал от текущего момента
     }
     if a.ctx != nil {
         a.cfgMu.Lock()
@@ -258,7 +289,7 @@ func (a *App) SetAutoStart(enable bool) error {
         return saveErr
     }
     if a.trayB != nil {
-        a.trayB.SetAutoState(enable) // зафиксировать факт
+        a.trayB.SetAutoState(enable)
     }
     if a.ctx != nil {
         runtime.EventsEmit(a.ctx, "autostart:changed", enable)
