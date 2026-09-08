@@ -6,7 +6,7 @@ import (
 	"sync"
 	"time"
 
-	"fyne.io/systray"
+	"github.com/energye/systray"
 )
 
 // Hooks — всё, что трей просит сделать у внешнего мира (приложение внедряет реализации).
@@ -53,6 +53,26 @@ func (t *Tray) onReady() {
     }
     systray.SetTooltip("Конвертер валют")
 
+    // ЛКМ — открыть окно конвертера, меню НЕ показывать (не вызываем ShowMenu).
+    // Работает на Windows/macOS. На Linux AppIndicator-протокол в большинстве DE
+    // не передаёт приложению тип клика — там меню откроется в любом случае,
+    // функциональность сохраняет первый пункт меню «Открыть».
+    systray.SetOnClick(func(_ systray.IMenu) {
+        if t.hooks.ShowWidget != nil {
+            t.hooks.ShowWidget()
+        }
+    })
+    // ПКМ — контекстное меню.
+    systray.SetOnRClick(func(menu systray.IMenu) {
+        menu.ShowMenu()
+    })
+    // Двойной клик — тоже окно.
+    systray.SetOnDClick(func(_ systray.IMenu) {
+        if t.hooks.ShowWidget != nil {
+            t.hooks.ShowWidget()
+        }
+    })
+
     t.mOpen = systray.AddMenuItem("Открыть", "Показать окно конвертера")
     t.mRefresh = systray.AddMenuItem(t.refreshTitle(), "Запросить свежие курсы из API")
     systray.AddSeparator()
@@ -65,30 +85,33 @@ func (t *Tray) onReady() {
     onClick(t.mRefresh, t.hooks.Refresh)
     onClick(t.mSettings, t.hooks.OpenSettings)
     onClick(t.mQuit, t.hooks.Quit)
-    go func() {
-        for range t.mAuto.ClickedCh {
+
+    // Галочка автозапуска: клик переключает локальное состояние,
+    // фактическое состояние подтверждает app (SetAutoState).
+    // В energye-форке подписка называется Click(fn func()) — колбэк без аргументов.
+    t.mAuto.Click(func() {
+        go func() {
             t.autoOn = !t.autoOn
             if t.hooks.ToggleAutoStart != nil {
-                t.hooks.ToggleAutoStart(t.autoOn) // приложение подтвердит/исправит фактом
+                t.hooks.ToggleAutoStart(t.autoOn)
             }
-        }
-    }()
+        }()
+    })
 }
 
+// onClick подписывает пункт меню на клик. Оборачиваем в goroutine, чтобы
+// не блокировать цикл сообщений трея (сеть/реестр внутри колбэка недопустимы).
 func onClick(m *systray.MenuItem, fn func()) {
-    if fn == nil || m == nil {
+    if m == nil || fn == nil {
         return
     }
-    go func() {
-        for range m.ClickedCh {
-            fn()
-        }
-    }()
+    m.Click(func() {
+        go fn()
+    })
 }
 
 /* ---------- мост из приложения (реализация app.TrayBridge) ---------- */
 
-// refreshTitle — заголовок кнопки обновления с временем последнего успеха.
 func (t *Tray) refreshTitle() string {
     t.mu.Lock()
     defer t.mu.Unlock()
@@ -124,14 +147,14 @@ func (t *Tray) SetBusy(busy bool) {
         return
     }
     if t.inCooldown() {
-        return // кулдаун сам включит кнопку по истечении
+        return // кулдаун сам вернёт кнопку по истечении
     }
     t.mRefresh.SetTitle(t.refreshTitle())
     t.mRefresh.Enable()
 }
 
 // Cooldown блокирует пункт обновления на время d (серый, некликабельный),
-// показывая в заголовке обратный отсчёт. Повторный вызов перезапускает отсчёт.
+// показывая обратный отсчёт. Повторный вызов перезапускает отсчёт.
 func (t *Tray) Cooldown(d time.Duration) {
     t.mu.Lock()
     if t.cooldownStop != nil {
