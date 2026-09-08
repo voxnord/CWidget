@@ -1,0 +1,23 @@
+# Скомпилированные бинарники и каталоги сборки Wails
+/build
+*.exe
+*.exe.manifest
+*.dll
+*.so
+*.dylib
+
+# Артефакты сборки фронтенда
+/frontend/node_modules/
+/frontend/wailsjs/
+
+# Временные файлы и лог-файлы
+*.log
+*.tmp
+
+# Системные и IDE файлы
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.suo
+*.user

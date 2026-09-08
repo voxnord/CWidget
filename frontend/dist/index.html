@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>Конвертер валют</title>
+  <link rel="stylesheet" href="/style.css"/>
+</head>
+<body>
+<main id="app">
+
+  <!-- ======================= ВИДЖЕТ ======================= -->
+  <section id="view-main">
+    <header class="topbar drag">
+      <span id="src-badge" class="src">—</span>
+      <span id="upd-badge" class="upd" title="Обновлено">…</span>
+      <div class="tools no-drag">
+        <button id="btn-refresh" class="icon-btn" title="Обновить курс">⟳</button>
+        <button id="btn-settings" class="icon-btn" title="Настройки">⚙</button>
+      </div>
+    </header>
+
+    <div class="grid">
+      <!-- строка сумм: ввод слева, результат справа, свап посередине -->
+      <div class="cell">
+        <input id="in-amount" class="num no-drag" value="100" autocomplete="off"/>
+      </div>
+      <button id="swap-amt" class="swap no-drag" title="Поменять местами">⇄</button>
+      <div class="cell right">
+        <output id="out-result" class="num result">—</output>
+      </div>
+
+      <!-- строка валют: селекты, второй свап — тот же функционал -->
+      <div class="cell">
+        <select id="sel-left" class="no-drag"></select>
+      </div>
+      <button id="swap-cur" class="swap no-drag" title="Поменять валюты">⇄</button>
+      <div class="cell">
+        <select id="sel-right" class="no-drag"></select>
+      </div>
+
+      <!-- строки курса с трендом -->
+      <div class="rateline right-gap">
+        <span id="arr-l" class="arr flat">⠀</span><span id="cap-l" class="cap">—</span>
+      </div>
+      <div></div>
+      <div class="rateline right">
+        <span id="arr-r" class="arr flat">⠀</span><span id="cap-r" class="cap">—</span>
+      </div>
+
+      <div id="msg-row" class="rateline msg"><span id="msg-text"></span></div>
+      <div></div><div></div>
+    </div>
+  </section>
+
+  <!-- ======================= НАСТРОЙКИ ======================= -->
+  <section id="view-settings" hidden>
+    <header class="topbar drag">
+      <button id="btn-back" class="icon-btn no-drag" title="Назад">‹</button>
+      <b class="ttl">Настройки</b>
+      <span style="flex:1"></span>
+    </header>
+
+    <nav class="tabs no-drag">
+      <button class="tab active" data-tab="basic">Основные</button>
+      <button class="tab" data-tab="about">О программе</button>
+    </nav>
+
+    <div id="tab-basic" class="tabpane">
+      <label class="lbl">Конвертировать по умолчанию</label>
+      <div class="defpair">
+        <select id="set-left"></select>
+        <span>→</span>
+        <select id="set-right"></select>
+      </div>
+
+      <label class="lbl" for="set-interval">Период обновления курса</label>
+      <select id="set-interval">
+        <option value="15">15 минут</option>
+        <option value="30">30 минут</option>
+        <option value="60" selected>1 час</option>
+        <option value="180">3 часа</option>
+        <option value="360">6 часов</option>
+      </select>
+
+      <div class="switchrow">
+        <span>Запускать при старте системы</span>
+        <button id="set-autostart" class="toggle" role="switch" aria-checked="false"></button>
+      </div>
+
+      <button id="btn-save" class="primary">Сохранить</button>
+    </div>
+
+    <div id="tab-about" class="tabpane" hidden>
+      <p><b>Конвертер валют</b> <span id="ver"></span> — виджет в трее.</p>
+      <p>Источники курсов: <a href="#" onclick="return false">cbr-xml-daily.ru (данные ЦБ РФ)</a>,
+        <a href="#" onclick="return false">frankfurter.app (данные ЕЦБ)</a>. Открытые бесплатные API.</p>
+      <p>Go · Wails v2 · локальное хранение настроек.</p>
+    </div>
+
+    <div id="toast" class="toast">Сохранено</div>
+  </section>
+</main>
+<script src="/main.js"></script>
+</body>
+</html>
