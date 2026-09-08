@@ -10,7 +10,7 @@ body{overflow:hidden;color:var(--txt);font-size:13px;user-select:none;border-rad
 .drag{--wails-draggable:drag}
 .no-drag{--wails-draggable:no-drag}
 
-.topbar{display:flex;align-items:center;gap:8px;padding:8px 10px;height:30px;cursor:default}
+.topbar{display:flex;align-items:center;gap:8px;padding:16px 12px 8px;cursor:default}
 .src{background:#232630;color:#aab1c5;padding:1px 7px;border-radius:8px;font-size:11px}
 .upd{flex:1;color:var(--dim);font-size:11px;text-align:right}
 .upd.err{color:var(--down)}

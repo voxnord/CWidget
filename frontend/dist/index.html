@@ -74,6 +74,9 @@
         <select id="set-right"></select>
       </div>
 
+      <label class="lbl" for="set-provider">Источник курсов</label>
+      <select id="set-provider"></select>
+
       <label class="lbl" for="set-interval">Период обновления курса</label>
       <select id="set-interval">
         <option value="15">15 минут</option>
@@ -92,10 +95,10 @@
     </div>
 
     <div id="tab-about" class="tabpane" hidden>
-      <p><b>Конвертер валют</b> <span id="ver"></span> — виджет в трее.</p>
-      <p>Источники курсов: <a href="#" onclick="return false">cbr-xml-daily.ru (данные ЦБ РФ)</a>,
-        <a href="#" onclick="return false">frankfurter.app (данные ЕЦБ)</a>. Открытые бесплатные API.</p>
-      <p>Go · Wails v2 · локальное хранение настроек.</p>
+      <p class="about"><b>Конвертер валют</b> <span id="ver"></span> — виджет в трее.</p>
+      <p class="about">Источники курсов: cbr-xml-daily.ru (данные ЦБ РФ),
+        frankfurter.app (данные ЕЦБ). Открытые бесплатные API.</p>
+      <p class="about">Go · Wails v2 · локальное хранение настроек.</p>
     </div>
 
     <div id="toast" class="toast">Сохранено</div>

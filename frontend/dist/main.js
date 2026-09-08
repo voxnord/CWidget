@@ -115,10 +115,22 @@ function applyUpdate(p) {
     badge.textContent = txt;
     badge.classList.remove("err");
   }
+  // Бейдж источника обновляется из факта загрузки — при смене провайдера
+  // сюда придёт новое имя, а набор валют полностью заменится (без хвостов).
   $("src-badge").textContent = S.table?.source ?? "—";
   fillSelect($("sel-left"), S.left);
   fillSelect($("sel-right"), S.right);
   recalc();
+}
+
+/* -------------------------------- тост ----------------------------------- */
+let toastTimer = null;
+function showToast(text) {
+  const t = $("toast");
+  t.textContent = text;
+  t.classList.add("show");
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => t.classList.remove("show"), 1600);
 }
 
 /* ---------------------- кнопка «Обновить» (окно) ------------------------- */
@@ -168,7 +180,7 @@ function setMode(mode) { // только DOM; размер/позиция/пок
   if (mode === "main") recalc();
 }
 
-/* Заполнение настроек — вызывается при ЛЮБОМ способе их открытия
+/* Заполнение настроек — при ЛЮБОМ способе их открытия
  * (и кнопкой-шестерёнкой, и пунктом меню трея). */
 async function populateSettings() {
   const st = await window.go.app.App.GetInitState();
@@ -177,6 +189,19 @@ async function populateSettings() {
   fillSelect($("set-right"), st.config.target_currency);
   $("set-interval").value = String(st.config.refresh_interval_minutes);
   $("set-autostart").setAttribute("aria-checked", String(st.autostart_enabled));
+
+  // Список источников строится из реестра провайдеров — новый провайдер
+  // появляется здесь автоматически, без кода. Авто-режима нет: только конкретные.
+  const provSel = $("set-provider");
+  provSel.innerHTML = "";
+  for (const p of st.providers ?? []) {
+    const o = document.createElement("option");
+    o.value = p.key;
+    o.textContent = p.name;
+    provSel.appendChild(o);
+  }
+  provSel.value = st.provider ?? "";
+
   $("ver").textContent = "v0.1.0";
 }
 
@@ -194,6 +219,21 @@ async function openSettings() {
  $("btn-refresh").addEventListener("click", () => window.go.app.App.ManualRefresh());
  $("btn-settings").addEventListener("click", () => openSettings());
  $("btn-back").addEventListener("click", () => showMode("main"));
+
+/* Смена источника применяется сразу (не через «Сохранить»):
+ * данные нового провайдера подтянутся автоматически, бейдж обновится. */
+ $("set-provider").addEventListener("change", async e => {
+  const key = e.target.value;
+  const name = e.target.selectedOptions[0]?.textContent ?? key;
+  try {
+    await window.go.app.App.SetProvider(key);
+    showToast(`Источник: ${name}`);
+  } catch (err) {
+    alert(err);
+    const st = await window.go.app.App.GetInitState();
+    e.target.value = st.provider ?? ""; // откат на фактический выбор
+  }
+});
 
 /* команды режима приходят с бэкенда (трей → ShowMode → событие) */
 window.runtime?.EventsOn?.("ui:mode", m => {
@@ -230,9 +270,7 @@ document.querySelectorAll(".tab").forEach(btn => btn.addEventListener("click", (
   try {
     await window.go.app.App.SetDefaults(
       $("set-left").value, $("set-right").value, parseInt($("set-interval").value, 10));
-    const toast = $("toast");
-    toast.classList.add("show");
-    setTimeout(() => toast.classList.remove("show"), 1600);
+    showToast("Сохранено");
   } catch (e) { alert(e); }
 });
  $("set-autostart").addEventListener("click", async () => {

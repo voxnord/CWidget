@@ -33,10 +33,12 @@ type ratesUpdate struct {
 }
 
 type InitPayload struct {
-    Config      config.Config `json:"config"`
-    AutoEnabled bool          `json:"autostart_enabled"`
-    CooldownSec int           `json:"cooldown_sec"` // остаток кулдауна обновления
-    Update      ratesUpdate   `json:"update"`
+    Config      config.Config        `json:"config"`
+    AutoEnabled bool                 `json:"autostart_enabled"`
+    CooldownSec int                  `json:"cooldown_sec"` // остаток кулдауна обновления
+    Provider    string               `json:"provider"`     // выбранный провайдер ("" = авто)
+    Providers   []rates.ProviderInfo `json:"providers"`    // зарегистрированные провайдеры
+    Update      ratesUpdate          `json:"update"`
 }
 
 type App struct {
@@ -46,8 +48,8 @@ type App struct {
     ratesM *rates.Manager
     trayB  TrayBridge
 
-    exiting      atomic.Bool
-    busy         atomic.Bool
+    exiting       atomic.Bool
+    busy          atomic.Bool
     cooldownUntil atomic.Int64 // unix-время окончания кулдауна
 
     stopMu sync.Mutex
@@ -86,7 +88,7 @@ func (a *App) ShowMode(mode string) {
     if a.ctx == nil {
         return
     }
-    w, h := 380, 245
+    w, h := 380, 260
     if mode == "settings" {
         w, h = 380, 480
     }
@@ -232,8 +234,31 @@ func (a *App) GetInitState() InitPayload {
         Config:      cfgCopy,
         AutoEnabled: autostartEnabled(),
         CooldownSec: cooldownSec,
+        Provider:    a.ratesM.Preferred(),
+        Providers:   a.ratesM.Providers(),
         Update:      ratesUpdate{Table: tbl, Names: a.ratesM.Names()},
     }
+}
+
+// SetProvider — смена источника курсов. Универсальна: работает с любым ключом,
+// присутствующим в реестре менеджера; на стороне провайдеров не нужно ни строчки.
+func (a *App) SetProvider(key string) error {
+    key = strings.ToLower(strings.TrimSpace(key))
+    if !a.ratesM.HasKey(key) {
+        return errors.New("неизвестный провайдер: " + key)
+    }
+    a.cfgMu.Lock()
+    a.cfg.Provider = key
+    saveErr := config.Save(a.cfg)
+    a.cfgMu.Unlock()
+    if saveErr != nil {
+        return saveErr
+    }
+    a.ratesM.SetPreferred(key)
+    // Немедленно подтянуть данные нового источника (с кулдауном — как ручное
+    // обновление: защита от «полистать список и устроить шторм запросов»).
+    go a.BackgroundRefresh(true)
+    return nil
 }
 
 func (a *App) SetDefaults(base, target string, minutes int) error {

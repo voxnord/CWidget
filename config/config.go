@@ -13,11 +13,12 @@ const (
 )
 
 type Config struct {
-    Base       string   `json:"base_currency"`             // валюта слева по умолчанию
-    Target     string   `json:"target_currency"`           // валюта справа по умолчанию
-    AutoStart  bool     `json:"autostart"`                 // зеркало состояния (источник истины — ОС)
-    RefreshMin int      `json:"refresh_interval_minutes"`  // период фонового опроса
-    Priority   []string `json:"providers_priority,omitempty"` // порядок адаптеров: ["cbr","frankfurter"]
+    Base       string   `json:"base_currency"`                // валюта слева по умолчанию
+    Target     string   `json:"target_currency"`              // валюта справа по умолчанию
+    AutoStart  bool     `json:"autostart"`                    // зеркало состояния (источник истины — ОС)
+    RefreshMin int      `json:"refresh_interval_minutes"`     // период фонового опроса
+    Provider   string   `json:"provider,omitempty"`           // выбранный источник курсов (ключ); "" = авто
+    Priority   []string `json:"providers_priority,omitempty"` // порядок регистрации провайдеров
 }
 
 func dir() (string, error) {
@@ -69,6 +70,7 @@ func Default() *Config {
 func sanitize(c *Config) {
     c.Base = strings.ToUpper(strings.TrimSpace(c.Base))
     c.Target = strings.ToUpper(strings.TrimSpace(c.Target))
+    c.Provider = strings.ToLower(strings.TrimSpace(c.Provider)) // валидность проверит менеджер
     if c.RefreshMin < 5 {
         c.RefreshMin = 5
     }
