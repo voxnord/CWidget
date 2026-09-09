@@ -24,15 +24,15 @@
       <div class="cell">
         <input id="in-amount" class="num no-drag" value="100" autocomplete="off"/>
       </div>
-      <button id="swap-amt" class="swap no-drag" title="⇄">⇄</button>
+      <button id="swap-amt" class="swap no-drag" data-i18n-title="ui.swap.amounts">⇄</button>
       <div class="cell right">
-        <output id="out-result" class="num result">—</output>
+        <input id="out-result" class="num result no-drag" value="" autocomplete="off" inputmode="decimal"/>
       </div>
 
       <div class="cell">
         <select id="sel-left" class="no-drag"></select>
       </div>
-      <button id="swap-cur" class="swap no-drag" title="⇄">⇄</button>
+      <button id="swap-cur" class="swap no-drag" data-i18n-title="ui.swap.currencies">⇄</button>
       <div class="cell">
         <select id="sel-right" class="no-drag"></select>
       </div>

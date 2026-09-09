@@ -1,4 +1,4 @@
-module github.com/you/currency-widget
+module github.com/voxnord/cwidget
 
 go 1.27.1
 

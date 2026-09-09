@@ -64,7 +64,9 @@
   "toast.theme.light": "Theme: light",
   "toast.provider": "Provider: {0}",
   "ui.retry_in": "Retry in {0} s",
-
+  "ui.swap.amounts": "Swap amounts and currencies",
+  "ui.swap.currencies": "Swap currencies",
+  
   "err.iso": "Expected a three-letter ISO code, e.g. RUB",
   "err.same_pair": "Default currencies must differ",
   "err.interval": "Refresh interval: from 5 to 1440 minutes",

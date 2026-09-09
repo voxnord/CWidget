@@ -8,7 +8,7 @@ import (
 )
 
 const (
-    appFolder  = "CurrencyWidget"
+    appFolder  = "Voxs_CurrencyWidget"
     configName = "config.json"
 )
 
@@ -23,7 +23,10 @@ type Config struct {
     Priority   []string `json:"providers_priority,omitempty"` // порядок регистрации провайдеров
 }
 
-func dir() (string, error) {
+// Dir — каталог данных приложения (%AppData%/Voxs_CurrencyWidget).
+// Используется и самим конфигом, и main.go (папка профиля WebView2),
+// чтобы всё данные приложения жили в одном месте.
+func Dir() (string, error) {
     root, err := os.UserConfigDir() // %AppData% / ~/.config
     if err != nil {
         return "", err
@@ -33,13 +36,13 @@ func dir() (string, error) {
 
 // Path — путь к config.json.
 func Path() (string, error) {
-    d, err := dir()
+    d, err := Dir()
     return filepath.Join(d, configName), err
 }
 
 // DataFile — сторонний файл в той же папке (например, кэш курсов).
 func DataFile(name string) (string, error) {
-    d, err := dir()
+    d, err := Dir()
     return filepath.Join(d, name), err
 }
 
@@ -89,7 +92,7 @@ func sanitize(c *Config) {
 
 // Save пишет конфиг атомарно (tmp + rename).
 func Save(c *Config) error {
-    d, err := dir()
+    d, err := Dir()
     if err != nil {
         return err
     }

@@ -1,8 +1,8 @@
 package app
 
 import (
+	"github.com/voxnord/cwidget/popup"
 	"github.com/wailsapp/wails/v2/pkg/runtime"
-	"github.com/you/currency-widget/popup"
 )
 
 /* ----------------------------- показ окна ------------------------------- */

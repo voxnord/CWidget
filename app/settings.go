@@ -5,9 +5,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/voxnord/cwidget/config"
+	"github.com/voxnord/cwidget/i18n"
 	"github.com/wailsapp/wails/v2/pkg/runtime"
-	"github.com/you/currency-widget/config"
-	"github.com/you/currency-widget/i18n"
 )
 
 /* --------------------------- API для фронтенда --------------------------- */

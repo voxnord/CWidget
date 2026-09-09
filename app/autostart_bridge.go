@@ -1,6 +1,6 @@
 package app
 
-import "github.com/you/currency-widget/autostart"
+import "github.com/voxnord/cwidget/autostart"
 
 // Тонкие обёртки: app.go не знает о платформенных реализациях,
 // а build tags сами подставляют нужный файл при сборке под ОС.

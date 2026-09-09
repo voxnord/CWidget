@@ -6,10 +6,10 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/voxnord/cwidget/config"
+	"github.com/voxnord/cwidget/i18n"
+	"github.com/voxnord/cwidget/rates"
 	"github.com/wailsapp/wails/v2/pkg/runtime"
-	"github.com/you/currency-widget/config"
-	"github.com/you/currency-widget/i18n"
-	"github.com/you/currency-widget/rates"
 )
 
 // WindowTitle — уникальный заголовок окна. Задаётся из main.go ДО wails.Run:

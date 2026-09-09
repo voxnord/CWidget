@@ -10,7 +10,7 @@ import (
 
 const (
     runKeyPath = `Software\Microsoft\Windows\CurrentVersion\Run`
-    valueName  = "CurrencyWidget"
+    valueName  = "CWidget"
 )
 
 func Enable() error {

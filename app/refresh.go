@@ -4,8 +4,8 @@ import (
 	"context"
 	"time"
 
+	"github.com/voxnord/cwidget/rates"
 	"github.com/wailsapp/wails/v2/pkg/runtime"
-	"github.com/you/currency-widget/rates"
 )
 
 /* -------------------------- обновление курсов --------------------------- */

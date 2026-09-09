@@ -5,6 +5,8 @@ import (
 	"embed"
 	"log"
 	"net/http"
+	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/wailsapp/wails/v2"
@@ -12,12 +14,12 @@ import (
 	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
 	"github.com/wailsapp/wails/v2/pkg/options/windows"
 
-	"github.com/you/currency-widget/app"
-	"github.com/you/currency-widget/config"
-	"github.com/you/currency-widget/i18n"
-	"github.com/you/currency-widget/popup"
-	"github.com/you/currency-widget/rates"
-	"github.com/you/currency-widget/tray"
+	"github.com/voxnord/cwidget/app"
+	"github.com/voxnord/cwidget/config"
+	"github.com/voxnord/cwidget/i18n"
+	"github.com/voxnord/cwidget/popup"
+	"github.com/voxnord/cwidget/rates"
+	"github.com/voxnord/cwidget/tray"
 )
 
 //go:embed all:frontend/dist
@@ -29,7 +31,9 @@ var iconICO []byte
 //go:embed assets/icon.png
 var iconPNG []byte
 
-const winTitle = "cw-floating-converter" // уникально — popup ищет окно по нему
+// winTitle — внутренний уникальный заголовок окна: popup-модуль ищет окно
+// по нему (таскбар/позиция/фокус). Пользователю не виден, менять не обязательно.
+const winTitle = "cw-floating-converter"
 
 func main() {
     cfg, err := config.Load()
@@ -37,8 +41,7 @@ func main() {
         log.Fatalf("config: %v", err)
     }
 
-    // Локализация: загрузка словарей ДО создания трея (он сразу говорит
-    // на нужном языке) и нормализация выбранного языка из конфига.
+    // Локализация: словари ДО создания трея; нормализация языка из конфига.
     if err := i18n.Load(); err != nil {
         log.Fatalf("i18n: %v", err)
     }
@@ -107,6 +110,14 @@ func main() {
     appCore.SetTray(trayCtl)
     go trayCtl.Run()
 
+    // Профиль WebView2 — внутрь папки данных приложения,
+    // чтобы в %APPDATA% не заводилась отдельная папка "<имя_exe>.exe".
+    webviewData := ""
+    if d, err := config.Dir(); err == nil {
+        webviewData = filepath.Join(d, "EBWebView")
+        _ = os.MkdirAll(webviewData, 0o755)
+    }
+
     err = wails.Run(&options.App{
         Title:       winTitle,
         Width:       380,
@@ -122,11 +133,12 @@ func main() {
             popup.MoveNearTray(winTitle)
             popup.RoundCorners(winTitle)
         },
-        // «Стекло» + прозрачность под скруглённые углы.
+        // «Стекло» + прозрачность под скруглённые углы; фиксированный профиль.
         Windows: &windows.Options{
             WebviewIsTransparent:              true,
             WindowIsTranslucent:               true,
             DisableFramelessWindowDecorations: true,
+            WebviewUserDataPath:               webviewData,
         },
         Bind: []interface{}{appCore},
     })

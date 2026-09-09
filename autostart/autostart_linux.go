@@ -8,7 +8,7 @@ import (
 	"strings"
 )
 
-const desktopName = "currency-widget.desktop"
+const desktopName = "cwidget.desktop"
 
 func desktopPath() (string, error) {
     cfg, err := os.UserConfigDir() // $XDG_CONFIG_HOME либо ~/.config
@@ -40,8 +40,8 @@ func Enable() error {
     content := "[Desktop Entry]\n" +
         "Type=Application\n" +
         "Version=1.0\n" +
-        "Name=Currency Widget\n" +
-        "Comment=Конвертер валют в системном трее\n" +
+        "Name=CWidget\n" +
+        "Comment=Tray currency converter\n" +
         "Exec=" + escapeExec(exe) + "\n" +
         "Terminal=false\n" +
         "NoDisplay=false\n" +

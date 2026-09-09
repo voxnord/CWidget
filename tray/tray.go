@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"github.com/energye/systray"
-	"github.com/you/currency-widget/i18n"
+	"github.com/voxnord/cwidget/i18n"
 )
 
 // Hooks — всё, что трей просит сделать у внешнего мира (приложение внедряет реализации).

@@ -3,7 +3,8 @@
 const $ = id => document.getElementById(id);
 
 const S = {
-  left: "RUB", right: "KZT", amount: "100",
+  left: "RUB", right: "KZT",
+  amountSide: "left", // какое поле сейчас источник истины: "left" | "right"
   table: null, names: {},
   dict: {},  // словарь текущего языка (приходит с бэкенда)
   err: false, // состояние «нет связи» для бейджа
@@ -71,8 +72,7 @@ function applyDict(dict) {
 
   // Динамические тексты главного окна.
   if (S.err) {
-    const b = $("upd-badge");
-    b.textContent = t("rates.error");
+    $("upd-badge").textContent = t("rates.error");
   } else {
     applyUpdate({}); // перерисует бейдж (обн./кот.), строки курса и т.д.
   }
@@ -138,24 +138,53 @@ function codesFallback(pref, names, taken) {
 }
 
 /* ------------------------------- отрисовка ------------------------------- */
+/* recalc: пересчитывается ТОЛЬКО соседнее поле — то, в котором пользователь
+ * не печатает (S.amountSide). Источник истины читается из самого поля. */
 function recalc() {
+  const leftEl = $("in-amount");
+  const rightEl = $("out-result");
   const calcLR = pair(S.left, S.right);
-  const amt = parseAmt($("in-amount").value);
-  $("out-result").textContent =
-    (!isNaN(amt) && calcLR) ? money(amt * calcLR.cur) : "—";
+  const calcRL = pair(S.right, S.left);
+  const amt = parseAmt(S.amountSide === "right" ? rightEl.value : leftEl.value);
+  const ok = !isNaN(amt);
+
+  if (S.amountSide === "right") {
+    leftEl.value = (ok && calcRL) ? money(amt * calcRL.cur) : "";
+  } else {
+    rightEl.value = (ok && calcLR) ? money(amt * calcLR.cur) : "";
+  }
 
   $("cap-l").textContent = calcLR ? `1 ${S.left} = ${money(calcLR.cur)} ${S.right}` : t("rates.unavailable");
-  const calcRL = pair(S.right, S.left);
   $("cap-r").textContent = calcRL ? `1 ${S.right} = ${money(calcRL.cur)} ${S.left}` : "";
 
   setArr($("arr-l"), trendDir(calcLR));
   setArr($("arr-r"), trendDir(calcRL));
 }
 
+/* Нижняя кнопка ⇄: развернуть пару валют; число пользователя остаётся
+ * в своём поле (и в роли источника), соседнее пересчитывается. */
 function doSwap() {
   [S.left, S.right] = [S.right, S.left];
   $("sel-left").value = S.left;
   $("sel-right").value = S.right;
+  recalc();
+}
+
+/* Верхняя кнопка ⇄: развернуть операцию — значения обмениваются между полями
+ * вместе с валютами: 100 RUB → 525,3784 KZT  ⇒  525,3784 KZT → 100 RUB.
+ * Новым источником становится левое поле (оно же — поле ввода) с тем числом,
+ * что было выведено справа. Если справа нечего парсить (нет курса) —
+ * просто разворачиваем пару. toPrecision(10) убирает float-шум. */
+function doSwapAll() {
+  const v = parseAmt($("out-result").value);
+  [S.left, S.right] = [S.right, S.left];
+  $("sel-left").value = S.left;
+  $("sel-right").value = S.right;
+  if (!isNaN(v)) {
+    const clean = String(parseFloat(v.toPrecision(10)));
+    S.amountSide = "left";
+    $("in-amount").value = clean;
+  }
   recalc();
 }
 
@@ -391,11 +420,12 @@ async function openSettings() {
 }
 
 /* ------------------------------ события UI ------------------------------- */
- $("in-amount").addEventListener("input", () => { S.amount = $("in-amount").value; recalc(); });
+ $("in-amount").addEventListener("input", () => { S.amountSide = "left"; recalc(); });
+ $("out-result").addEventListener("input", () => { S.amountSide = "right"; recalc(); });
  $("sel-left").addEventListener("change", e => { S.left = e.target.value; recalc(); });
  $("sel-right").addEventListener("change", e => { S.right = e.target.value; recalc(); });
- $("swap-amt").addEventListener("click", doSwap);
- $("swap-cur").addEventListener("click", doSwap);
+ $("swap-amt").addEventListener("click", doSwapAll); // верхняя: суммы + валюты
+ $("swap-cur").addEventListener("click", doSwap);    // нижняя: только валюты
  $("btn-refresh").addEventListener("click", () => window.go.app.App.ManualRefresh());
  $("btn-settings").addEventListener("click", () => openSettings());
 
@@ -425,7 +455,7 @@ for (const id of ["set-left", "set-right", "set-interval", "set-provider", "set-
     closeConfirm();
     showToast(t("toast.applied"));
     if (ctx === "back") showMode("main");
-  } catch (e) { alert(tErr(e)); }
+  } catch (e) { alert(tErr(e)); } // диалог остаётся открытым
 });
  $("confirm-no").addEventListener("click", () => {
   const ctx = confirmCtx;
@@ -453,9 +483,8 @@ window.runtime?.EventsOn?.("rates:update", p => {
 });
 window.runtime?.EventsOn?.("rates:error", () => {
   S.err = true;
-  const b = $("upd-badge");
-  b.textContent = t("rates.error");
-  b.classList.add("err");
+  $("upd-badge").textContent = t("rates.error");
+  $("upd-badge").classList.add("err");
 });
 window.runtime?.EventsOn?.("refresh:busy", b => setRefreshBusy(!!b));
 window.runtime?.EventsOn?.("refresh:cooldown", s => startCooldownUI(s | 0));

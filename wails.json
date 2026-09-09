@@ -1,10 +1,10 @@
 {
   "$schema": "https://wails.io/schemas/config.v2.json",
-  "name": "Converter",
-  "outputfilename": "Converter",
+  "name": "CWidget",
+  "outputfilename": "CWidget",
   "frontend:install": "",
   "frontend:build": "",
   "frontend:dev:watcher": "",
   "frontend:dev:serverUrl": "auto",
-  "author": { "name": "knox" }
+  "author": { "name": "voxnord" }
 }
