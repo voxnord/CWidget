@@ -1,12 +1,12 @@
 package tray
 
 import (
-	"fmt"
 	"runtime"
 	"sync"
 	"time"
 
 	"github.com/energye/systray"
+	"github.com/you/currency-widget/i18n"
 )
 
 // Hooks — всё, что трей просит сделать у внешнего мира (приложение внедряет реализации).
@@ -15,6 +15,7 @@ type Hooks struct {
     OpenSettings    func()
     Refresh         func()
     ToggleAutoStart func(enable bool)
+    SetLanguage     func(code string)
     Quit            func()
 }
 
@@ -29,6 +30,8 @@ type Tray struct {
     mAuto     *systray.MenuItem
     mSettings *systray.MenuItem
     mQuit     *systray.MenuItem
+    mLang     *systray.MenuItem
+    langItems map[string]*systray.MenuItem
 
     mu            sync.Mutex
     lastUpdate    time.Time     // момент последнего успешного обновления
@@ -51,12 +54,11 @@ func (t *Tray) onReady() {
     } else {
         systray.SetIcon(t.iconPNG)
     }
-    systray.SetTooltip("Конвертер валют")
+    systray.SetTooltip(i18n.T("tray.tooltip"))
 
     // ЛКМ — открыть окно конвертера, меню НЕ показывать (не вызываем ShowMenu).
     // Работает на Windows/macOS. На Linux AppIndicator-протокол в большинстве DE
-    // не передаёт приложению тип клика — там меню откроется в любом случае,
-    // функциональность сохраняет первый пункт меню «Открыть».
+    // не передаёт приложению тип клика — там меню откроется в любом случае.
     systray.SetOnClick(func(_ systray.IMenu) {
         if t.hooks.ShowWidget != nil {
             t.hooks.ShowWidget()
@@ -73,22 +75,39 @@ func (t *Tray) onReady() {
         }
     })
 
-    t.mOpen = systray.AddMenuItem("Открыть", "Показать окно конвертера")
-    t.mRefresh = systray.AddMenuItem(t.refreshTitle(), "Запросить свежие курсы из API")
+    t.mOpen = systray.AddMenuItem(i18n.T("tray.open"), i18n.T("tray.open.tip"))
+    t.mRefresh = systray.AddMenuItem(t.refreshTitle(), i18n.T("tray.refresh.tip"))
     systray.AddSeparator()
-    t.mAuto = systray.AddMenuItemCheckbox("Запускать при старте системы", "Автозапуск вместе с операционной системой", false)
-    t.mSettings = systray.AddMenuItem("Настройки", "Валюты по умолчанию и параметры")
+    t.mAuto = systray.AddMenuItemCheckbox(i18n.T("tray.autostart"), i18n.T("tray.autostart.tip"), false)
+    t.mSettings = systray.AddMenuItem(i18n.T("tray.settings"), i18n.T("tray.settings.tip"))
+
+    // Подменю языков: пункты строятся из реестра словарей — новый язык
+    // (новый JSON в locales/) появляется здесь автоматически.
+    t.mLang = systray.AddMenuItem(i18n.T("tray.language"), i18n.T("tray.language"))
+    t.langItems = make(map[string]*systray.MenuItem)
+    for _, l := range i18n.Languages() {
+        code := l.Code
+        item := t.mLang.AddSubMenuItem(t.langTitle(code), "")
+        item.Click(func() {
+            go func() {
+                if t.hooks.SetLanguage != nil {
+                    // app сохранит выбор, переключит словарь, переведёт трей
+                    // (через Retranslate) и разошлёт событие фронтенду.
+                    t.hooks.SetLanguage(code)
+                }
+            }()
+        })
+        t.langItems[code] = item
+    }
+
     systray.AddSeparator()
-    t.mQuit = systray.AddMenuItem("Выход", "Завершить приложение")
+    t.mQuit = systray.AddMenuItem(i18n.T("tray.quit"), i18n.T("tray.quit.tip"))
 
     onClick(t.mOpen, t.hooks.ShowWidget)
     onClick(t.mRefresh, t.hooks.Refresh)
     onClick(t.mSettings, t.hooks.OpenSettings)
     onClick(t.mQuit, t.hooks.Quit)
 
-    // Галочка автозапуска: клик переключает локальное состояние,
-    // фактическое состояние подтверждает app (SetAutoState).
-    // В energye-форке подписка называется Click(fn func()) — колбэк без аргументов.
     t.mAuto.Click(func() {
         go func() {
             t.autoOn = !t.autoOn
@@ -99,8 +118,6 @@ func (t *Tray) onReady() {
     })
 }
 
-// onClick подписывает пункт меню на клик. Оборачиваем в goroutine, чтобы
-// не блокировать цикл сообщений трея (сеть/реестр внутри колбэка недопустимы).
 func onClick(m *systray.MenuItem, fn func()) {
     if m == nil || fn == nil {
         return
@@ -112,13 +129,28 @@ func onClick(m *systray.MenuItem, fn func()) {
 
 /* ---------- мост из приложения (реализация app.TrayBridge) ---------- */
 
+func (t *Tray) langTitle(code string) string {
+    name := code
+    for _, l := range i18n.Languages() {
+        if l.Code == code {
+            name = l.Name
+            break
+        }
+    }
+    if i18n.Current() == code {
+        return "✓ " + name
+    }
+    return name
+}
+
 func (t *Tray) refreshTitle() string {
     t.mu.Lock()
-    defer t.mu.Unlock()
-    if t.lastUpdate.IsZero() {
-        return "Обновить курс"
+    last := t.lastUpdate
+    t.mu.Unlock()
+    if last.IsZero() {
+        return i18n.T("tray.refresh")
     }
-    return fmt.Sprintf("[%s] Обновить курс", t.lastUpdate.Local().Format("15:04"))
+    return i18n.T("tray.refresh.time", last.Local().Format("15:04"))
 }
 
 func (t *Tray) inCooldown() bool {
@@ -127,12 +159,47 @@ func (t *Tray) inCooldown() bool {
     return time.Now().Before(t.cooldownUntil)
 }
 
+// Retranslate — перевод всех пунктов меню на текущий язык i18n.
+// Вызывается приложением после SetLanguage. Идемпотентен.
+func (t *Tray) Retranslate() {
+    if t.mOpen == nil {
+        return // меню ещё не построено
+    }
+    systray.SetTooltip(i18n.T("tray.tooltip"))
+    t.mOpen.SetTitle(i18n.T("tray.open"))
+    t.mOpen.SetTooltip(i18n.T("tray.open.tip"))
+
+    switch {
+    case t.inCooldown():
+        // заголовок с отсчётом перерисует тикер кулдауна — он берёт i18n.T в момент тика
+    case t.mRefresh.Disabled():
+        t.mRefresh.SetTitle(i18n.T("tray.refresh.busy"))
+    default:
+        t.mRefresh.SetTitle(t.refreshTitle())
+    }
+    t.mRefresh.SetTooltip(i18n.T("tray.refresh.tip"))
+
+    t.mAuto.SetTitle(i18n.T("tray.autostart"))
+    t.mAuto.SetTooltip(i18n.T("tray.autostart.tip"))
+    t.mSettings.SetTitle(i18n.T("tray.settings"))
+    t.mSettings.SetTooltip(i18n.T("tray.settings.tip"))
+    t.mQuit.SetTitle(i18n.T("tray.quit"))
+    t.mQuit.SetTooltip(i18n.T("tray.quit.tip"))
+
+    if t.mLang != nil {
+        t.mLang.SetTitle(i18n.T("tray.language"))
+        for code, item := range t.langItems {
+            item.SetTitle(t.langTitle(code))
+        }
+    }
+}
+
 // SetUpdatedLabel фиксирует время последнего успешного обновления.
 func (t *Tray) SetUpdatedLabel(at time.Time) {
     t.mu.Lock()
     t.lastUpdate = at
     t.mu.Unlock()
-    if t.mRefresh != nil && !t.inCooldown() {
+    if t.mRefresh != nil && !t.inCooldown() && !t.mRefresh.Disabled() {
         t.mRefresh.SetTitle(t.refreshTitle())
     }
 }
@@ -142,7 +209,7 @@ func (t *Tray) SetBusy(busy bool) {
         return
     }
     if busy {
-        t.mRefresh.SetTitle("Обновление…")
+        t.mRefresh.SetTitle(i18n.T("tray.refresh.busy"))
         t.mRefresh.Disable()
         return
     }
@@ -178,7 +245,7 @@ func (t *Tray) Cooldown(d time.Duration) {
             if remain <= 0 {
                 break
             }
-            t.mRefresh.SetTitle(fmt.Sprintf("Обновить курс (через %d c)", int(remain.Seconds())+1))
+            t.mRefresh.SetTitle(i18n.T("tray.refresh.cooldown", int(remain.Seconds())+1))
             select {
             case <-stop:
                 return
@@ -195,7 +262,7 @@ func (t *Tray) Cooldown(d time.Duration) {
 
 func (t *Tray) NotifyFailure(reason string) {
     if t.mRefresh != nil {
-        t.mRefresh.SetTooltip("Последняя попытка не удалась: " + reason)
+        t.mRefresh.SetTooltip(i18n.T("tray.fail.tip", reason))
     }
 }
 

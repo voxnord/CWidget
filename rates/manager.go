@@ -68,7 +68,6 @@ func (m *Manager) Preferred() string {
 }
 
 // HasKey — существует ли провайдер с таким ключом.
-// Пустой ключ валиден только если в реестре есть явная регистрация.
 func (m *Manager) HasKey(key string) bool {
     m.mu.RLock()
     defer m.mu.RUnlock()
@@ -92,21 +91,21 @@ func (m *Manager) Providers() []ProviderInfo {
 }
 
 // ordered — порядок обхода: выбранный первым, остальные резервом.
-func (m *Manager) ordered() []Provider {
+func (m *Manager) ordered() []Registration {
     m.mu.RLock()
     defer m.mu.RUnlock()
-    out := make([]Provider, 0, len(m.regs))
+    out := make([]Registration, 0, len(m.regs))
     if m.preferred != "" {
         for _, r := range m.regs {
             if r.Key == m.preferred {
-                out = append(out, r.Provider)
+                out = append(out, r)
                 break
             }
         }
     }
     for _, r := range m.regs {
         if r.Key != m.preferred {
-            out = append(out, r.Provider)
+            out = append(out, r)
         }
     }
     return out
@@ -125,16 +124,17 @@ func (m *Manager) TryRefresh(ctx context.Context) (*Table, error) {
     defer m.busy.Store(false)
 
     var lastErr error
-    for _, p := range m.ordered() {
+    for _, reg := range m.ordered() {
         if err := ctx.Err(); err != nil {
             return nil, err
         }
-        tbl, err := p.Fetch(ctx)
+        tbl, err := reg.Provider.Fetch(ctx)
         if err != nil {
-            lastErr = fmt.Errorf("%s: %w", p.Name(), err)
+            lastErr = fmt.Errorf("%s: %w", reg.Provider.Name(), err)
             continue
         }
         tbl.FetchedAt = tbl.FetchedAt.UTC()
+        tbl.SourceKey = reg.Key // ключ для локализации имени на фронте
         m.mu.Lock()
         m.current = tbl
         m.mu.Unlock()

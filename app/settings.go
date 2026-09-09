@@ -7,6 +7,7 @@ import (
 
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 	"github.com/you/currency-widget/config"
+	"github.com/you/currency-widget/i18n"
 )
 
 /* --------------------------- API для фронтенда --------------------------- */
@@ -28,16 +29,20 @@ func (a *App) GetInitState() InitPayload {
         CooldownSec: cooldownSec,
         Provider:    a.ratesM.Preferred(),
         Providers:   a.ratesM.Providers(),
+        Lang:        i18n.Current(),
+        Languages:   i18n.Languages(),
+        I18n:        i18n.Dict(),
         Update:      ratesUpdate{Table: tbl, Names: a.ratesM.Names()},
     }
 }
 
 // SetProvider — смена источника курсов. Универсальна: работает с любым ключом,
 // присутствующим в реестре менеджера; на стороне провайдеров не нужно ни строчки.
+// Ошибки возвращаются КЛЮЧАМИ локализации ("err.xxx[|парам]"), перевод — на фронте.
 func (a *App) SetProvider(key string) error {
     key = strings.ToLower(strings.TrimSpace(key))
     if !a.ratesM.HasKey(key) {
-        return errors.New("неизвестный провайдер: " + key)
+        return errors.New("err.provider_unknown|" + key)
     }
     a.cfgMu.Lock()
     a.cfg.Provider = key
@@ -58,7 +63,7 @@ func (a *App) SetProvider(key string) error {
 func (a *App) SetTheme(theme string) error {
     theme = strings.ToLower(strings.TrimSpace(theme))
     if theme != "dark" && theme != "light" {
-        return errors.New("тема: dark или light")
+        return errors.New("err.theme")
     }
     a.cfgMu.Lock()
     a.cfg.Theme = theme
@@ -73,18 +78,48 @@ func (a *App) SetTheme(theme string) error {
     return nil
 }
 
+// SetLanguage — смена языка интерфейса. Один вызов делает всё:
+// сохраняет выбор, переключает словарь, переводит меню трея (Retranslate)
+// и рассылает словарь фронтенду. Работает и из настроек, и из подменю трея.
+func (a *App) SetLanguage(lang string) error {
+    lang = strings.ToLower(strings.TrimSpace(lang))
+    if !i18n.Has(lang) {
+        return errors.New("err.language|" + lang)
+    }
+    a.cfgMu.Lock()
+    a.cfg.Language = lang
+    saveErr := config.Save(a.cfg)
+    a.cfgMu.Unlock()
+    if saveErr != nil {
+        return saveErr
+    }
+    if err := i18n.SetLanguage(lang); err != nil {
+        return err
+    }
+    if a.trayB != nil {
+        a.trayB.Retranslate()
+    }
+    if a.ctx != nil {
+        runtime.EventsEmit(a.ctx, "i18n:changed", map[string]any{
+            "lang": lang,
+            "dict": i18n.Dict(),
+        })
+    }
+    return nil
+}
+
 func (a *App) SetDefaults(base, target string, minutes int) error {
     base, target = strings.ToUpper(strings.TrimSpace(base)), strings.ToUpper(strings.TrimSpace(target))
     if len(base) != 3 || len(target) != 3 ||
         strings.ContainsFunc(base, func(r rune) bool { return r < 'A' || r > 'Z' }) ||
         strings.ContainsFunc(target, func(r rune) bool { return r < 'A' || r > 'Z' }) {
-        return errors.New("ожидается ISO-код из трёх букв, например RUB")
+        return errors.New("err.iso")
     }
     if base == target {
-        return errors.New("валюты по умолчанию не должны совпадать")
+        return errors.New("err.same_pair")
     }
     if minutes < 5 || minutes > 1440 {
-        return errors.New("интервал обновления: от 5 до 1440 минут")
+        return errors.New("err.interval")
     }
 
     a.cfgMu.Lock()

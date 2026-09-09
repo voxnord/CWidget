@@ -19,6 +19,7 @@ type Config struct {
     RefreshMin int      `json:"refresh_interval_minutes"`     // период фонового опроса
     Provider   string   `json:"provider,omitempty"`           // выбранный источник курсов (ключ)
     Theme      string   `json:"theme,omitempty"`              // "dark" | "light"
+    Language   string   `json:"language,omitempty"`           // код языка ("ru", "en", ...)
     Priority   []string `json:"providers_priority,omitempty"` // порядок регистрации провайдеров
 }
 
@@ -73,9 +74,11 @@ func sanitize(c *Config) {
     c.Target = strings.ToUpper(strings.TrimSpace(c.Target))
     c.Provider = strings.ToLower(strings.TrimSpace(c.Provider))
     c.Theme = strings.ToLower(strings.TrimSpace(c.Theme))
+    c.Language = strings.ToLower(strings.TrimSpace(c.Language))
     if c.Theme != "light" {
-        c.Theme = "dark" // всё неизвестное → тёмная
+        c.Theme = "dark"
     }
+    // Валидность языка проверит i18n в main.go (конфиг не должен о нём знать).
     if c.RefreshMin < 5 {
         c.RefreshMin = 5
     }

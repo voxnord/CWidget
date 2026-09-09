@@ -15,10 +15,13 @@ type RatePoint struct {
 type Table struct {
     FetchedAt time.Time `json:"fetched_at"`
     // QuoteDate — дата котировок источника ("2006-01-02"), если API её сообщает.
-    // Для ЦБ РФ это дата официального курса (меняется раз в день!).
-    // FetchedAt при этом — момент нашего успешного запроса.
-    QuoteDate string               `json:"quote_date,omitempty"`
-    Source    string               `json:"source"` // имя провайдера
+    QuoteDate string `json:"quote_date,omitempty"`
+    // Source — каноническое имя провайдера (из Name(), отображается,
+    // если в словарях локализации нет перевода для этого провайдера).
+    // SourceKey — стабильный ключ из реестра (Registration.Key):
+    // фронтенд ищет перевод по ключу "provider.<source_key>".
+    Source    string               `json:"source"`
+    SourceKey string               `json:"source_key,omitempty"`
     Anchor    string               `json:"anchor"` // например "RUB" или "EUR"
     Points    map[string]RatePoint `json:"points"`
     Names     map[string]string    `json:"names,omitempty"` // код → человекочитаемое имя

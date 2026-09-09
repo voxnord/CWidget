@@ -14,6 +14,7 @@ import (
 
 	"github.com/you/currency-widget/app"
 	"github.com/you/currency-widget/config"
+	"github.com/you/currency-widget/i18n"
 	"github.com/you/currency-widget/popup"
 	"github.com/you/currency-widget/rates"
 	"github.com/you/currency-widget/tray"
@@ -34,6 +35,21 @@ func main() {
     cfg, err := config.Load()
     if err != nil {
         log.Fatalf("config: %v", err)
+    }
+
+    // Локализация: загрузка словарей ДО создания трея (он сразу говорит
+    // на нужном языке) и нормализация выбранного языка из конфига.
+    if err := i18n.Load(); err != nil {
+        log.Fatalf("i18n: %v", err)
+    }
+    if !i18n.Has(cfg.Language) {
+        cfg.Language = i18n.DefaultLanguage()
+        if err := config.Save(cfg); err != nil {
+            log.Printf("config: не удалось сохранить язык: %v", err)
+        }
+    }
+    if err := i18n.SetLanguage(cfg.Language); err != nil {
+        log.Fatalf("i18n: %v", err)
     }
 
     httpc := &http.Client{Timeout: 15 * time.Second}
@@ -68,8 +84,6 @@ func main() {
         log.Printf("rates: кэш не загружен (%v)", err)
     }
 
-    // Нормализация выбранного источника: пустой/невалидный → первый
-    // зарегистрированный (ЦБ РФ).
     if !manager.HasKey(cfg.Provider) {
         cfg.Provider = regs[0].Key
         if err := config.Save(cfg); err != nil {
@@ -86,6 +100,7 @@ func main() {
         OpenSettings:    appCore.OpenSettingsView,
         Refresh:         appCore.ManualRefresh,
         ToggleAutoStart: func(enable bool) { _ = appCore.SetAutoStart(enable) },
+        SetLanguage:     func(code string) { _ = appCore.SetLanguage(code) },
         Quit:            appCore.Quit,
     }
     trayCtl := tray.New(iconICO, iconPNG, hooks)
@@ -103,7 +118,7 @@ func main() {
         OnBeforeClose: appCore.BeforeClose, // закрытие = Hide
         OnDomReady: func(_ context.Context) {
             popup.RemoveFromTaskbar(winTitle)
-            popup.LockResize(winTitle)  // строго фиксированный размер
+            popup.LockResize(winTitle)
             popup.MoveNearTray(winTitle)
             popup.RoundCorners(winTitle)
         },

@@ -8,6 +8,7 @@ import (
 
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 	"github.com/you/currency-widget/config"
+	"github.com/you/currency-widget/i18n"
 	"github.com/you/currency-widget/rates"
 )
 
@@ -22,6 +23,7 @@ type TrayBridge interface {
     SetBusy(busy bool)
     Cooldown(d time.Duration)
     NotifyFailure(reason string)
+    Retranslate() // перевод пунктов меню на текущий язык i18n
 }
 
 type ratesUpdate struct {
@@ -35,6 +37,9 @@ type InitPayload struct {
     CooldownSec int                  `json:"cooldown_sec"` // остаток кулдауна обновления
     Provider    string               `json:"provider"`     // выбранный провайдер
     Providers   []rates.ProviderInfo `json:"providers"`    // зарегистрированные провайдеры
+    Lang        string               `json:"lang"`         // текущий язык
+    Languages   []i18n.Language      `json:"languages"`    // доступные языки
+    I18n        map[string]string    `json:"i18n"`         // словарь текущего языка для UI
     Update      ratesUpdate          `json:"update"`
 }
 

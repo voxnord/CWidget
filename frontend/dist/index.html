@@ -13,10 +13,10 @@
   <section id="view-main">
     <header class="topbar drag">
       <span id="src-badge" class="src">—</span>
-      <span id="upd-badge" class="upd" title="Обновлено">…</span>
+      <span id="upd-badge" class="upd" data-i18n-title="upd.title">…</span>
       <div class="tools no-drag">
-        <button id="btn-refresh" class="icon-btn" title="Обновить курс">⟳</button>
-        <button id="btn-settings" class="icon-btn" title="Настройки">⚙</button>
+        <button id="btn-refresh" class="icon-btn" data-i18n-title="tray.refresh">⟳</button>
+        <button id="btn-settings" class="icon-btn" data-i18n-title="settings.title">⚙</button>
       </div>
     </header>
 
@@ -24,7 +24,7 @@
       <div class="cell">
         <input id="in-amount" class="num no-drag" value="100" autocomplete="off"/>
       </div>
-      <button id="swap-amt" class="swap no-drag" title="Поменять местами">⇄</button>
+      <button id="swap-amt" class="swap no-drag" title="⇄">⇄</button>
       <div class="cell right">
         <output id="out-result" class="num result">—</output>
       </div>
@@ -32,7 +32,7 @@
       <div class="cell">
         <select id="sel-left" class="no-drag"></select>
       </div>
-      <button id="swap-cur" class="swap no-drag" title="Поменять валюты">⇄</button>
+      <button id="swap-cur" class="swap no-drag" title="⇄">⇄</button>
       <div class="cell">
         <select id="sel-right" class="no-drag"></select>
       </div>
@@ -53,55 +53,57 @@
   <!-- ======================= НАСТРОЙКИ ======================= -->
   <section id="view-settings" hidden>
     <header class="topbar drag">
-      <button id="btn-back" class="icon-btn no-drag" title="Назад">‹</button>
-      <b class="ttl">Настройки</b>
+      <button id="btn-back" class="icon-btn no-drag" data-i18n-title="settings.back">‹</button>
+      <b class="ttl" data-i18n="settings.title">Настройки</b>
       <span style="flex:1"></span>
     </header>
 
     <nav class="tabs no-drag">
-      <button class="tab active" data-tab="basic">Основные</button>
-      <button class="tab" data-tab="about">О программе</button>
+      <button class="tab active" data-tab="basic" data-i18n="settings.tab.basic">Основные</button>
+      <button class="tab" data-tab="about" data-i18n="settings.tab.about">О программе</button>
     </nav>
 
     <div id="tab-basic" class="tabpane">
-      <label class="lbl">Конвертировать по умолчанию</label>
+      <label class="lbl" data-i18n="settings.default_pair">Конвертировать по умолчанию</label>
       <div class="defpair">
         <select id="set-left"></select>
         <span>→</span>
         <select id="set-right"></select>
       </div>
 
-      <label class="lbl" for="set-provider">Источник курсов</label>
+      <label class="lbl" for="set-provider" data-i18n="settings.provider">Источник курсов</label>
       <select id="set-provider"></select>
 
-      <label class="lbl" for="set-interval">Период обновления курса</label>
+      <label class="lbl" for="set-interval" data-i18n="settings.interval">Период обновления курса</label>
       <select id="set-interval">
-        <option value="15">15 минут</option>
-        <option value="30">30 минут</option>
-        <option value="60" selected>1 час</option>
-        <option value="180">3 часа</option>
-        <option value="360">6 часов</option>
+        <option value="15" data-i18n="interval.15">15 минут</option>
+        <option value="30" data-i18n="interval.30">30 минут</option>
+        <option value="60" selected data-i18n="interval.60">1 час</option>
+        <option value="180" data-i18n="interval.180">3 часа</option>
+        <option value="360" data-i18n="interval.360">6 часов</option>
       </select>
 
-      <label class="lbl" for="set-theme">Тема оформления</label>
+      <label class="lbl" for="set-theme" data-i18n="settings.theme">Тема оформления</label>
       <select id="set-theme">
-        <option value="dark">Тёмная</option>
-        <option value="light">Светлая</option>
+        <option value="dark" data-i18n="theme.dark">Тёмная</option>
+        <option value="light" data-i18n="theme.light">Светлая</option>
       </select>
+
+      <label class="lbl" for="set-lang" data-i18n="settings.language">Язык</label>
+      <select id="set-lang"></select>
 
       <div class="switchrow">
-        <span>Запускать при старте системы</span>
+        <span data-i18n="settings.autostart">Запускать при старте системы</span>
         <button id="set-autostart" class="toggle" role="switch" aria-checked="false"></button>
       </div>
 
-      <button id="btn-save" class="primary">Сохранить</button>
+      <button id="btn-save" class="primary" data-i18n="settings.save">Сохранить</button>
     </div>
 
     <div id="tab-about" class="tabpane" hidden>
-      <p class="about"><b>Конвертер валют</b> <span id="ver"></span> — виджет в трее.</p>
-      <p class="about">Источники курсов: cbr-xml-daily.ru (данные ЦБ РФ),
-        frankfurter.app (данные ЕЦБ). Открытые бесплатные API.</p>
-      <p class="about">Go · Wails v2 · локальное хранение настроек.</p>
+      <p class="about"><b><span data-i18n="about.name">Конвертер валют</span></b> <span id="ver"></span> <span data-i18n="about.tagline">— виджет в трее.</span></p>
+      <p class="about" data-i18n="about.sources"></p>
+      <p class="about" data-i18n="about.stack"></p>
     </div>
 
     <div id="toast" class="toast">Сохранено</div>
@@ -109,15 +111,13 @@
 </main>
 
 <!-- ======================= ПОДТВЕРЖДЕНИЕ ======================= -->
-<!-- Живёт внутри того же webview: всегда поверх окна виджета,
-     стилизуется теми же переменными тем. -->
 <div id="confirm-overlay" class="confirm-overlay" hidden>
   <div class="confirm" role="dialog" aria-modal="true">
-    <p class="confirm-title">Применить изменения?</p>
-    <p class="confirm-text">Настройки были изменены. Сохранить новые значения?</p>
+    <p class="confirm-title" data-i18n="confirm.title">Применить изменения?</p>
+    <p class="confirm-text" data-i18n="confirm.text">Настройки были изменены. Сохранить новые значения?</p>
     <div class="confirm-actions">
-      <button id="confirm-yes" class="primary">Да</button>
-      <button id="confirm-no" class="ghost">Нет</button>
+      <button id="confirm-yes" class="primary" data-i18n="confirm.yes">Да</button>
+      <button id="confirm-no" class="ghost" data-i18n="confirm.no">Нет</button>
     </div>
   </div>
 </div>

@@ -5,14 +5,12 @@ const $ = id => document.getElementById(id);
 const S = {
   left: "RUB", right: "KZT", amount: "100",
   table: null, names: {},
+  dict: {},  // словарь текущего языка (приходит с бэкенда)
+  err: false, // состояние «нет связи» для бейджа
 };
 
-/* Снапшот СОХРАНЁННЫХ настроек (что реально лежит в config.json / применено).
- * null, пока настройки ни разу не открывались в этой сессии. */
+/* Снапшот СОХРАНЁННЫХ настроек. null, пока настройки не открывались. */
 let saved = null;
-
-/* Контекст диалога: 'back' — выход в конвертер по «Назад»,
- * 'reopen' — окно было скрыто с несохранёнными правками и открыто снова. */
 let confirmCtx = null;
 
 /* ---------------- Popup-поведение: скрытие при потере фокуса ---------------- */
@@ -32,9 +30,56 @@ function showMode(mode) {
   try { window.go.app.App.ShowMode(mode); } catch (e) { console.error(e); }
 }
 
-/* -------------------------------- тема ----------------------------------- */
-function applyTheme(t) {
-  document.body.classList.toggle("light", t === "light");
+/* ------------------------------ i18n ------------------------------------ */
+function t(key, ...args) {
+  let s = S.dict[key];
+  if (s == null) return key;
+  args.forEach((a, i) => { s = s.replaceAll(`{${i}}`, String(a)); });
+  return s;
+}
+/* Ошибки бэкенда приходят ключами: "err.iso" или "err.provider_unknown|ключ". */
+function tErr(e) {
+  const parts = String(e).split("|");
+  const s = t(parts[0], ...parts.slice(1));
+  return s === parts[0] ? String(e) : s;
+}
+/* Имя провайдера: перевод по ключу из словаря, иначе каноническое имя. */
+function providerLabel(p) {
+  const k = `provider.${p.key}`;
+  const tr = t(k);
+  return tr !== k ? tr : (p.name ?? p.key);
+}
+function providerName(tbl) {
+  if (tbl?.source_key) return providerLabel({ key: tbl.source_key, name: tbl.source });
+  return tbl?.source ?? "—";
+}
+/* Применить словарь ко всем помеченным элементам + перерисовать динамику. */
+function applyDict(dict) {
+  if (!dict) return;
+  S.dict = dict;
+  document.querySelectorAll("[data-i18n]").forEach(el => { el.textContent = t(el.dataset.i18n); });
+  document.querySelectorAll("[data-i18n-title]").forEach(el => { el.title = t(el.dataset.i18nTitle); });
+  document.title = t("app.title");
+
+  // Провайдеры в открытом селекте настроек — переименовать на новом языке.
+  const provSel = $("set-provider");
+  if (provSel) {
+    for (const o of provSel.options) {
+      o.textContent = providerLabel({ key: o.value, name: o.dataset.name ?? o.value });
+    }
+  }
+
+  // Динамические тексты главного окна.
+  if (S.err) {
+    const b = $("upd-badge");
+    b.textContent = t("rates.error");
+  } else {
+    applyUpdate({}); // перерисует бейдж (обн./кот.), строки курса и т.д.
+  }
+}
+
+function applyTheme(th) {
+  document.body.classList.toggle("light", th === "light");
 }
 
 /* ---------------------------- форматирование ---------------------------- */
@@ -60,9 +105,9 @@ function fmtQuoteDate(iso) {
 
 /* ------------------------------ расчёты --------------------------------- */
 function pair(a, b) {
-  const t = S.table;
-  if (!t) return null;
-  const f = t.points?.[a], q = t.points?.[b];
+  const t2 = S.table;
+  if (!t2) return null;
+  const f = t2.points?.[a], q = t2.points?.[b];
   if (!f || !q || !q.price) return null;
   const cur = f.price / q.price;
   let prev = null, hasPrev = false;
@@ -81,8 +126,6 @@ function setArr(el, dir) {
   el.className = "arr " + (dir ?? "flat");
 }
 
-/* Выбор доступного кода: предпочитаемый, если есть у источника;
- * иначе ходовые USD/EUR/RUB; иначе первый по алфавиту имён. */
 function codesFallback(pref, names, taken) {
   names = names ?? {};
   if (pref && names[pref] && pref !== taken) return pref;
@@ -101,7 +144,7 @@ function recalc() {
   $("out-result").textContent =
     (!isNaN(amt) && calcLR) ? money(amt * calcLR.cur) : "—";
 
-  $("cap-l").textContent = calcLR ? `1 ${S.left} = ${money(calcLR.cur)} ${S.right}` : "курс недоступен";
+  $("cap-l").textContent = calcLR ? `1 ${S.left} = ${money(calcLR.cur)} ${S.right}` : t("rates.unavailable");
   const calcRL = pair(S.right, S.left);
   $("cap-r").textContent = calcRL ? `1 ${S.right} = ${money(calcRL.cur)} ${S.left}` : "";
 
@@ -132,16 +175,18 @@ function fillSelect(sel, value) {
 
 function applyUpdate(p) {
   if (p?.table) S.table = p.table;
-  if (p?.names) S.names = p.names; // строгая замена: набор валют текущего провайдера
+  if (p?.names) S.names = p.names;
+  if (p?.table) S.err = false;
+
   const badge = $("upd-badge");
   if (S.table?.fetched_at) {
-    let txt = `обн. ${fmtTime(new Date(S.table.fetched_at))}`;
+    let txt = `${t("badge.updated")} ${fmtTime(new Date(S.table.fetched_at))}`;
     const qd = fmtQuoteDate(S.table.quote_date);
-    if (qd) txt += ` · кот. ${qd}`;
+    if (qd) txt += ` · ${t("badge.quoted")} ${qd}`;
     badge.textContent = txt;
     badge.classList.remove("err");
   }
-  $("src-badge").textContent = S.table?.source ?? "—";
+  $("src-badge").textContent = providerName(S.table);
 
   if (Object.keys(S.names ?? {}).length && !pair(S.left, S.right)) {
     const nl = codesFallback(S.left, S.names);
@@ -156,11 +201,11 @@ function applyUpdate(p) {
 /* -------------------------------- тост ----------------------------------- */
 let toastTimer = null;
 function showToast(text) {
-  const t = $("toast");
-  t.textContent = text;
-  t.classList.add("show");
+  const tt = $("toast");
+  tt.textContent = text;
+  tt.classList.add("show");
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => t.classList.remove("show"), 1600);
+  toastTimer = setTimeout(() => tt.classList.remove("show"), 1600);
 }
 
 /* ---------------------- кнопка «Обновить» (окно) ------------------------- */
@@ -172,10 +217,10 @@ function setRefreshBusy(busy) {
   if (busy) {
     clearInterval(coolTimer); cooling = false;
     b.disabled = true; b.classList.remove("cool");
-    b.classList.add("spin"); b.textContent = "⟳"; b.title = "Обновление…";
+    b.classList.add("spin"); b.textContent = "⟳"; b.title = t("tray.refresh.busy");
   } else {
     b.classList.remove("spin");
-    if (!cooling) { b.disabled = false; b.textContent = "⟳"; b.title = "Обновить курс"; }
+    if (!cooling) { b.disabled = false; b.textContent = "⟳"; b.title = t("tray.refresh"); }
   }
 }
 function startCooldownUI(sec) {
@@ -188,7 +233,7 @@ function startCooldownUI(sec) {
   const tick = () => {
     if (sec <= 0) { endCooldownUI(); return; }
     b.textContent = String(sec);
-    b.title = `Повтор через ${sec} с`;
+    b.title = t("ui.retry_in", sec);
     sec--;
   };
   tick();
@@ -200,7 +245,7 @@ function endCooldownUI() {
   b.classList.remove("cool", "spin");
   b.disabled = false;
   b.textContent = "⟳";
-  b.title = "Обновить курс";
+  b.title = t("tray.refresh");
 }
 
 /* --------------------------- переключение режимов ------------------------ */
@@ -208,15 +253,14 @@ function setMode(mode) {
   $("view-main").hidden = mode === "settings";
   $("view-settings").hidden = mode === "main";
   if (mode === "main") {
-    closeConfirm(); // диалог живёт только внутри настроек; правки остаются ждать
+    closeConfirm();
     recalc();
   }
 }
 
-/* Списки валют в ОТКРЫТЫХ настройках подтягиваются под нового провайдера. */
 function syncSettingsCurrencies() {
   if ($("view-settings").hidden) return;
-  if (!$("confirm-overlay").hidden) return; // открыт диалог — контролы не трогаем
+  if (!$("confirm-overlay").hidden) return;
   const l = $("set-left").value;
   const r = $("set-right").value;
   const nl = codesFallback(l, S.names);
@@ -235,11 +279,11 @@ function snapshotFromState(st) {
     interval: String(st.config.refresh_interval_minutes),
     provider: st.provider ?? "",
     theme: st.config.theme === "light" ? "light" : "dark",
+    lang: st.lang ?? "",
   };
 }
 
-/* Есть ли неподтверждённые правки. Тумблер автозапуска сюда не входит:
- * он применяется мгновенно и на «грязность» не влияет. */
+/* Тумблер автозапуска применяется мгновенно и в «грязность» не входит. */
 function computeDirty() {
   if (!saved) return false;
   return (
@@ -247,7 +291,8 @@ function computeDirty() {
     $("set-right").value !== saved.target ||
     $("set-interval").value !== saved.interval ||
     $("set-provider").value !== saved.provider ||
-    $("set-theme").value !== saved.theme
+    $("set-theme").value !== saved.theme ||
+    $("set-lang").value !== saved.lang
   );
 }
 
@@ -267,44 +312,42 @@ function closeConfirm() {
   confirmCtx = null;
 }
 
-/* Применить всё выбранное в настройках (кроме автозапуска — он мгновенный). */
+/* Применить всё выбранное (кроме автозапуска — он мгновенный). */
 async function applyPending() {
   const base = $("set-left").value;
   const target = $("set-right").value;
   const minutes = parseInt($("set-interval").value, 10);
-  await window.go.app.App.SetDefaults(base, target, minutes); // валидация внутри
+  await window.go.app.App.SetDefaults(base, target, minutes);
 
   const provider = $("set-provider").value;
-  if (provider !== saved.provider) {
-    await window.go.app.App.SetProvider(provider);
-  }
+  if (provider !== saved.provider) await window.go.app.App.SetProvider(provider);
+
   const theme = $("set-theme").value;
-  if (theme !== saved.theme) {
-    await window.go.app.App.SetTheme(theme);
-  }
-  saved = { base, target, interval: String(minutes), provider, theme };
+  if (theme !== saved.theme) await window.go.app.App.SetTheme(theme);
+
+  const lang = $("set-lang").value;
+  if (lang !== saved.lang) await window.go.app.App.SetLanguage(lang);
+
+  saved = { base, target, interval: String(minutes), provider, theme, lang };
   updateDirtyUI();
 }
 
-/* Откатить контролы к сохранённым значениям (кнопка «Нет»). */
 function revertPending() {
   fillSelect($("set-left"), saved.base);
   fillSelect($("set-right"), saved.target);
   $("set-interval").value = saved.interval;
   $("set-provider").value = saved.provider;
   $("set-theme").value = saved.theme;
+  $("set-lang").value = saved.lang;
   updateDirtyUI();
 }
 
-/* Заполнение настроек — при открытии «с нуля» (без несохранённых правок). */
 async function populateSettings() {
   const st = await window.go.app.App.GetInitState();
   saved = snapshotFromState(st);
-  // СТРОГО словарь текущего провайдера — без подмеси от предыдущих.
   S.names = st.update.names ?? {};
   fillSelect($("set-left"), st.config.base_currency);
   fillSelect($("set-right"), st.config.target_currency);
-  // Если дефолтная пара отсутствует у текущего источника — показываем доступную.
   const nl = codesFallback(st.config.base_currency, S.names);
   const nr = codesFallback(st.config.target_currency, S.names, nl);
   if (nl && nr) {
@@ -320,12 +363,24 @@ async function populateSettings() {
   for (const p of st.providers ?? []) {
     const o = document.createElement("option");
     o.value = p.key;
-    o.textContent = p.name;
+    o.textContent = providerLabel(p);   // перевод по словарю текущего языка
+    o.dataset.name = p.name;            // каноническое имя — для переименования при смене языка
     provSel.appendChild(o);
   }
   provSel.value = saved.provider;
 
   $("set-theme").value = saved.theme;
+
+  const langSel = $("set-lang");
+  langSel.innerHTML = "";
+  for (const l of st.languages ?? []) {
+    const o = document.createElement("option");
+    o.value = l.code;
+    o.textContent = l.name; // самоназвание — не переводится
+    langSel.appendChild(o);
+  }
+  langSel.value = saved.lang;
+
   $("ver").textContent = "v0.1.0";
   updateDirtyUI();
 }
@@ -344,7 +399,6 @@ async function openSettings() {
  $("btn-refresh").addEventListener("click", () => window.go.app.App.ManualRefresh());
  $("btn-settings").addEventListener("click", () => openSettings());
 
-/* Выход из настроек: с правками — через подтверждение, без — сразу. */
  $("btn-back").addEventListener("click", () => {
   if (computeDirty()) {
     openConfirm("back");
@@ -353,33 +407,29 @@ async function openSettings() {
   showMode("main");
 });
 
-/* Любое изменение подтверждаемых настроек — только помечаем «грязность».
- * (Автозапуск — исключение, обрабатывается отдельно и мгновенно.) */
-for (const id of ["set-left", "set-right", "set-interval", "set-provider", "set-theme"]) {
+for (const id of ["set-left", "set-right", "set-interval", "set-provider", "set-theme", "set-lang"]) {
   $(id).addEventListener("change", updateDirtyUI);
 }
 
-/* Кнопка «Сохранить» = применить всё выбранное (остаёмся в настройках). */
  $("btn-save").addEventListener("click", async () => {
   try {
     await applyPending();
-    showToast("Сохранено");
-  } catch (e) { alert(e); }
+    showToast(t("toast.saved"));
+  } catch (e) { alert(tErr(e)); }
 });
 
-/* Диалог подтверждения */
  $("confirm-yes").addEventListener("click", async () => {
   const ctx = confirmCtx;
   try {
     await applyPending();
     closeConfirm();
-    showToast("Настройки применены");
-    if (ctx === "back") showMode("main"); // «reopen» — остаёмся в настройках
-  } catch (e) { alert(e); } // ошибка валидации — диалог остаётся открытым
+    showToast(t("toast.applied"));
+    if (ctx === "back") showMode("main");
+  } catch (e) { alert(tErr(e)); }
 });
  $("confirm-no").addEventListener("click", () => {
   const ctx = confirmCtx;
-  revertPending(); // «нет» — ничего не изменяется
+  revertPending();
   closeConfirm();
   if (ctx === "back") showMode("main");
 });
@@ -389,7 +439,7 @@ window.runtime?.EventsOn?.("ui:mode", m => {
   setMode(m);
   if (m === "settings") {
     if (computeDirty()) {
-      openConfirm("reopen"); // вернулись к неотправленным правкам — спросим
+      openConfirm("reopen");
     } else {
       populateSettings();
     }
@@ -402,13 +452,15 @@ window.runtime?.EventsOn?.("rates:update", p => {
   syncSettingsCurrencies();
 });
 window.runtime?.EventsOn?.("rates:error", () => {
+  S.err = true;
   const b = $("upd-badge");
-  b.textContent = "нет связи";
+  b.textContent = t("rates.error");
   b.classList.add("err");
 });
 window.runtime?.EventsOn?.("refresh:busy", b => setRefreshBusy(!!b));
 window.runtime?.EventsOn?.("refresh:cooldown", s => startCooldownUI(s | 0));
-window.runtime?.EventsOn?.("theme:changed", t => applyTheme(t));
+window.runtime?.EventsOn?.("theme:changed", th => applyTheme(th));
+window.runtime?.EventsOn?.("i18n:changed", p => applyDict(p?.dict));
 window.runtime?.EventsOn?.("autostart:changed", on => {
   $("set-autostart").setAttribute("aria-checked", String(!!on));
 });
@@ -436,6 +488,7 @@ document.querySelectorAll(".tab").forEach(btn => btn.addEventListener("click", (
 (async function init() {
   try {
     const st = await window.go.app.App.GetInitState();
+    applyDict(st.i18n);        // словарь ДО первого рендера
     applyTheme(st.config.theme);
     S.names = st.update.names ?? {};
     S.left = st.config.base_currency; S.right = st.config.target_currency;

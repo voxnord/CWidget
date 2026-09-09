@@ -15,7 +15,7 @@ func (a *App) ShowMode(mode string) {
     }
     w, h := 380, 260
     if mode == "settings" {
-        w, h = 380, 500
+        w, h = 380, 540
     }
     runtime.WindowSetSize(a.ctx, w, h)
     popup.MoveNearTray(WindowTitle)
