@@ -17,7 +17,8 @@ type Config struct {
     Target     string   `json:"target_currency"`              // валюта справа по умолчанию
     AutoStart  bool     `json:"autostart"`                    // зеркало состояния (источник истины — ОС)
     RefreshMin int      `json:"refresh_interval_minutes"`     // период фонового опроса
-    Provider   string   `json:"provider,omitempty"`           // выбранный источник курсов (ключ); "" = авто
+    Provider   string   `json:"provider,omitempty"`           // выбранный источник курсов (ключ)
+    Theme      string   `json:"theme,omitempty"`              // "dark" | "light"
     Priority   []string `json:"providers_priority,omitempty"` // порядок регистрации провайдеров
 }
 
@@ -70,7 +71,11 @@ func Default() *Config {
 func sanitize(c *Config) {
     c.Base = strings.ToUpper(strings.TrimSpace(c.Base))
     c.Target = strings.ToUpper(strings.TrimSpace(c.Target))
-    c.Provider = strings.ToLower(strings.TrimSpace(c.Provider)) // валидность проверит менеджер
+    c.Provider = strings.ToLower(strings.TrimSpace(c.Provider))
+    c.Theme = strings.ToLower(strings.TrimSpace(c.Theme))
+    if c.Theme != "light" {
+        c.Theme = "dark" // всё неизвестное → тёмная
+    }
     if c.RefreshMin < 5 {
         c.RefreshMin = 5
     }

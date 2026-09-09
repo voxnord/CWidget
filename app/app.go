@@ -36,7 +36,7 @@ type InitPayload struct {
     Config      config.Config        `json:"config"`
     AutoEnabled bool                 `json:"autostart_enabled"`
     CooldownSec int                  `json:"cooldown_sec"` // остаток кулдауна обновления
-    Provider    string               `json:"provider"`     // выбранный провайдер ("" = авто)
+    Provider    string               `json:"provider"`     // выбранный провайдер
     Providers   []rates.ProviderInfo `json:"providers"`    // зарегистрированные провайдеры
     Update      ratesUpdate          `json:"update"`
 }
@@ -67,13 +67,10 @@ func (a *App) SetTray(tb TrayBridge) { a.trayB = tb }
 func (a *App) Startup(ctx context.Context) {
     a.ctx = ctx
     a.startTicker()
-    // Первичный прогрев сети — не блокируем запуск UI. Кулдаун не включается:
-    // это не ручное нажатие.
-    go a.BackgroundRefresh(false)
+    go a.BackgroundRefresh(false) // прогрев без кулдауна
 }
 
 func (a *App) BeforeClose(ctx context.Context) bool {
-    // Закрытие окна = скрытие (виджет живёт в трее). Выход — только через трей.
     if a.exiting.Load() {
         return false
     }
@@ -83,20 +80,22 @@ func (a *App) BeforeClose(ctx context.Context) bool {
 
 /* ----------------------------- показ окна ------------------------------- */
 
-// ShowMode — единая точка показа: размер под режим, позиция у трея, фокус.
+// ShowMode — единая точка показа: размер под режим, позиция у трея,
+// скругление под фактический размер, фокус.
 func (a *App) ShowMode(mode string) {
     if a.ctx == nil {
         return
     }
     w, h := 380, 260
     if mode == "settings" {
-        w, h = 380, 480
+        w, h = 380, 500
     }
     runtime.WindowSetSize(a.ctx, w, h)
-    popup.MoveNearTray(WindowTitle) // правый нижний угол, над панелью задач
+    popup.MoveNearTray(WindowTitle)
+    popup.RoundCorners(WindowTitle) // регион зависит от размера — после ресайза
     runtime.WindowUnminimise(a.ctx)
     runtime.WindowShow(a.ctx)
-    popup.FocusWindow(WindowTitle) // гарантированная активация окна
+    popup.FocusWindow(WindowTitle)
     runtime.EventsEmit(a.ctx, "ui:mode", mode)
 }
 
@@ -113,16 +112,13 @@ func (a *App) Quit() {
 
 /* -------------------------- обновление курсов --------------------------- */
 
-// ManualRefresh — принудительное обновление по кнопке (трей или окно).
 func (a *App) ManualRefresh() {
     go a.BackgroundRefresh(true)
 }
 
-// BackgroundRefresh: manual=true → после завершения включается минутный кулдаун
-// (трей + кнопка в окне). Автообновление по таймеру кулдаун не включает.
 func (a *App) BackgroundRefresh(manual bool) {
     if !a.busy.CompareAndSwap(false, true) {
-        return // защита от спама кнопкой
+        return
     }
     defer a.busy.Store(false)
 
@@ -196,7 +192,7 @@ func (a *App) startTicker() {
                 t.Stop()
                 return
             case <-t.C:
-                a.BackgroundRefresh(false) // автообновление без кулдауна
+                a.BackgroundRefresh(false)
             }
         }
     }()
@@ -240,8 +236,6 @@ func (a *App) GetInitState() InitPayload {
     }
 }
 
-// SetProvider — смена источника курсов. Универсальна: работает с любым ключом,
-// присутствующим в реестре менеджера; на стороне провайдеров не нужно ни строчки.
 func (a *App) SetProvider(key string) error {
     key = strings.ToLower(strings.TrimSpace(key))
     if !a.ratesM.HasKey(key) {
@@ -255,9 +249,26 @@ func (a *App) SetProvider(key string) error {
         return saveErr
     }
     a.ratesM.SetPreferred(key)
-    // Немедленно подтянуть данные нового источника (с кулдауном — как ручное
-    // обновление: защита от «полистать список и устроить шторм запросов»).
     go a.BackgroundRefresh(true)
+    return nil
+}
+
+// SetTheme — смена темы ("dark" | "light"). Применяется немедленно.
+func (a *App) SetTheme(theme string) error {
+    theme = strings.ToLower(strings.TrimSpace(theme))
+    if theme != "dark" && theme != "light" {
+        return errors.New("тема: dark или light")
+    }
+    a.cfgMu.Lock()
+    a.cfg.Theme = theme
+    saveErr := config.Save(a.cfg)
+    a.cfgMu.Unlock()
+    if saveErr != nil {
+        return saveErr
+    }
+    if a.ctx != nil {
+        runtime.EventsEmit(a.ctx, "theme:changed", theme)
+    }
     return nil
 }
 
@@ -286,7 +297,7 @@ func (a *App) SetDefaults(base, target string, minutes int) error {
     }
     if intervalChanged {
         a.stopTicker()
-        a.startTicker() // первый тик — через новый интервал от текущего момента
+        a.startTicker()
     }
     if a.ctx != nil {
         a.cfgMu.Lock()

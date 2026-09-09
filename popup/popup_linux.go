@@ -29,8 +29,16 @@ func RemoveFromTaskbar(title string) {
     }()
 }
 
-// MoveNearTray — заглушка для Linux (позиционирование у трея зависит от DE).
+// MoveNearTray — заглушка (позиционирование у трея зависит от DE).
 func MoveNearTray(title string) {}
+
+// LockResize — заглушка (фиксирование размера на Linux зависит от WM;
+// при необходимости можно добавить через _MOTIF_WM_HINTS/xprop).
+func LockResize(title string) {}
+
+// RoundCorners — заглушка: скругление обеспечивает CSS border-radius,
+// а его видимость зависит от композитора (прозрачность окон).
+func RoundCorners(title string) {}
 
 // FocusWindow активирует окно по заголовку (X11, best-effort через wmctrl).
 func FocusWindow(title string) {

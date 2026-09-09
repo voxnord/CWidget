@@ -24,6 +24,11 @@ function showMode(mode) {
   try { window.go.app.App.ShowMode(mode); } catch (e) { console.error(e); }
 }
 
+/* -------------------------------- тема ----------------------------------- */
+function applyTheme(t) {
+  document.body.classList.toggle("light", t === "light");
+}
+
 /* ---------------------------- форматирование ---------------------------- */
 function money(v) {
   if (!isFinite(v)) return "—";
@@ -40,7 +45,7 @@ const BLANK = "\u2800";
 function fmtTime(d) {
   return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
 }
-function fmtQuoteDate(iso) { // "2026-09-08" → "08.09"
+function fmtQuoteDate(iso) {
   if (!iso || iso.length < 10) return null;
   return `${iso.slice(8, 10)}.${iso.slice(5, 7)}`;
 }
@@ -111,12 +116,10 @@ function applyUpdate(p) {
   if (S.table?.fetched_at) {
     let txt = `обн. ${fmtTime(new Date(S.table.fetched_at))}`;
     const qd = fmtQuoteDate(S.table.quote_date);
-    if (qd) txt += ` · кот. ${qd}`; // дата котировок источника (ЦБ меняет их раз в день)
+    if (qd) txt += ` · кот. ${qd}`;
     badge.textContent = txt;
     badge.classList.remove("err");
   }
-  // Бейдж источника обновляется из факта загрузки — при смене провайдера
-  // сюда придёт новое имя, а набор валют полностью заменится (без хвостов).
   $("src-badge").textContent = S.table?.source ?? "—";
   fillSelect($("sel-left"), S.left);
   fillSelect($("sel-right"), S.right);
@@ -174,14 +177,12 @@ function endCooldownUI() {
 }
 
 /* --------------------------- переключение режимов ------------------------ */
-function setMode(mode) { // только DOM; размер/позиция/показ — на бэкенде
+function setMode(mode) {
   $("view-main").hidden = mode === "settings";
   $("view-settings").hidden = mode === "main";
   if (mode === "main") recalc();
 }
 
-/* Заполнение настроек — при ЛЮБОМ способе их открытия
- * (и кнопкой-шестерёнкой, и пунктом меню трея). */
 async function populateSettings() {
   const st = await window.go.app.App.GetInitState();
   S.names = Object.assign({}, st.update.names ?? {}, S.names);
@@ -190,8 +191,6 @@ async function populateSettings() {
   $("set-interval").value = String(st.config.refresh_interval_minutes);
   $("set-autostart").setAttribute("aria-checked", String(st.autostart_enabled));
 
-  // Список источников строится из реестра провайдеров — новый провайдер
-  // появляется здесь автоматически, без кода. Авто-режима нет: только конкретные.
   const provSel = $("set-provider");
   provSel.innerHTML = "";
   for (const p of st.providers ?? []) {
@@ -201,6 +200,8 @@ async function populateSettings() {
     provSel.appendChild(o);
   }
   provSel.value = st.provider ?? "";
+
+  $("set-theme").value = st.config.theme === "light" ? "light" : "dark";
 
   $("ver").textContent = "v0.1.0";
 }
@@ -220,8 +221,7 @@ async function openSettings() {
  $("btn-settings").addEventListener("click", () => openSettings());
  $("btn-back").addEventListener("click", () => showMode("main"));
 
-/* Смена источника применяется сразу (не через «Сохранить»):
- * данные нового провайдера подтянутся автоматически, бейдж обновится. */
+/* Смена источника применяется сразу; данные нового провайдера подтянутся сами. */
  $("set-provider").addEventListener("change", async e => {
   const key = e.target.value;
   const name = e.target.selectedOptions[0]?.textContent ?? key;
@@ -231,14 +231,24 @@ async function openSettings() {
   } catch (err) {
     alert(err);
     const st = await window.go.app.App.GetInitState();
-    e.target.value = st.provider ?? ""; // откат на фактический выбор
+    e.target.value = st.provider ?? "";
   }
+});
+
+/* Смена темы применяется сразу. */
+ $("set-theme").addEventListener("change", async e => {
+  const t = e.target.value;
+  try {
+    await window.go.app.App.SetTheme(t);
+    applyTheme(t); // событие theme:changed придёт и так — это мгновенный отклик
+    showToast(t === "light" ? "Тема: светлая" : "Тема: тёмная");
+  } catch (err) { alert(err); }
 });
 
 /* команды режима приходят с бэкенда (трей → ShowMode → событие) */
 window.runtime?.EventsOn?.("ui:mode", m => {
   setMode(m);
-  if (m === "settings") populateSettings(); // открыто из трея — заполняем здесь
+  if (m === "settings") populateSettings();
 });
 
 /* события от бэкенда */
@@ -250,6 +260,7 @@ window.runtime?.EventsOn?.("rates:error", () => {
 });
 window.runtime?.EventsOn?.("refresh:busy", b => setRefreshBusy(!!b));
 window.runtime?.EventsOn?.("refresh:cooldown", s => startCooldownUI(s | 0));
+window.runtime?.EventsOn?.("theme:changed", t => applyTheme(t));
 window.runtime?.EventsOn?.("autostart:changed", on => {
   $("set-autostart").setAttribute("aria-checked", String(!!on));
 });
@@ -284,11 +295,12 @@ document.querySelectorAll(".tab").forEach(btn => btn.addEventListener("click", (
 (async function init() {
   try {
     const st = await window.go.app.App.GetInitState();
+    applyTheme(st.config.theme); // тема до первого показа окна
     S.names = st.update.names ?? {};
     S.left = st.config.base_currency; S.right = st.config.target_currency;
     applyUpdate(st.update);
     setRefreshBusy(false);
-    startCooldownUI(st.cooldown_sec | 0); // если приложение перезапущено в кулдауне
+    startCooldownUI(st.cooldown_sec | 0);
     setMode("main");
   } catch (e) { console.error("init:", e); }
 })();

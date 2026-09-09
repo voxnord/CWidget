@@ -21,7 +21,6 @@
     </header>
 
     <div class="grid">
-      <!-- строка сумм: ввод слева, результат справа, свап посередине -->
       <div class="cell">
         <input id="in-amount" class="num no-drag" value="100" autocomplete="off"/>
       </div>
@@ -30,7 +29,6 @@
         <output id="out-result" class="num result">—</output>
       </div>
 
-      <!-- строка валют: селекты, второй свап — тот же функционал -->
       <div class="cell">
         <select id="sel-left" class="no-drag"></select>
       </div>
@@ -39,7 +37,6 @@
         <select id="sel-right" class="no-drag"></select>
       </div>
 
-      <!-- строки курса с трендом -->
       <div class="rateline right-gap">
         <span id="arr-l" class="arr flat">⠀</span><span id="cap-l" class="cap">—</span>
       </div>
@@ -84,6 +81,12 @@
         <option value="60" selected>1 час</option>
         <option value="180">3 часа</option>
         <option value="360">6 часов</option>
+      </select>
+
+      <label class="lbl" for="set-theme">Тема оформления</label>
+      <select id="set-theme">
+        <option value="dark">Тёмная</option>
+        <option value="light">Светлая</option>
       </select>
 
       <div class="switchrow">

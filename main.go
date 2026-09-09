@@ -10,6 +10,7 @@ import (
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
 	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
+	"github.com/wailsapp/wails/v2/pkg/options/windows"
 
 	"github.com/you/currency-widget/app"
 	"github.com/you/currency-widget/config"
@@ -37,16 +38,14 @@ func main() {
 
     httpc := &http.Client{Timeout: 15 * time.Second}
 
-    // ---- Реестр провайдеров: ЕДИНСТВЕННОЕ место для подключения нового API.
-    // Добавьте сюда одну запись — провайдер сам появится в настройках
-    // («Источник курсов») и в каскаде обхода. Больше нигде кода не нужно. ----
+    // ---- Реестр провайдеров: ЕДИНСТВЕННОЕ место для подключения нового API. ----
     factory := map[string]func(*http.Client) rates.Provider{
         "cbr":         func(c *http.Client) rates.Provider { return rates.NewCBR(c) },
         "frankfurter": func(c *http.Client) rates.Provider { return rates.NewFrankfurter(c) },
     }
     order := cfg.Priority
     if len(order) == 0 {
-        order = []string{"cbr", "frankfurter"} // порядок по умолчанию (каскад)
+        order = []string{"cbr", "frankfurter"}
     }
     var regs []rates.Registration
     for _, key := range order {
@@ -56,7 +55,7 @@ func main() {
             log.Printf("config: неизвестный провайдер %q — пропущен", key)
         }
     }
-    if len(regs) == 0 { // страховка от битого providers_priority
+    if len(regs) == 0 {
         regs = append(regs,
             rates.Registration{Key: "cbr", Provider: rates.NewCBR(httpc)},
             rates.Registration{Key: "frankfurter", Provider: rates.NewFrankfurter(httpc)},
@@ -70,7 +69,7 @@ func main() {
     }
 
     // Нормализация выбранного источника: пустой/невалидный → первый
-    // зарегистрированный (ЦБ РФ). Авто-режима нет: провайдер всегда конкретный.
+    // зарегистрированный (ЦБ РФ).
     if !manager.HasKey(cfg.Provider) {
         cfg.Provider = regs[0].Key
         if err := config.Save(cfg); err != nil {
@@ -79,9 +78,9 @@ func main() {
     }
     manager.SetPreferred(cfg.Provider)
 
-    app.WindowTitle = winTitle // popup-модуль позиционирует окно по этому заголовку
+    app.WindowTitle = winTitle
 
-    appCore := app.New(cfg, manager, nil) // трей внедрим после его создания
+    appCore := app.New(cfg, manager, nil)
     hooks := tray.Hooks{
         ShowWidget:      appCore.ShowWidget,
         OpenSettings:    appCore.OpenSettingsView,
@@ -104,7 +103,15 @@ func main() {
         OnBeforeClose: appCore.BeforeClose, // закрытие = Hide
         OnDomReady: func(_ context.Context) {
             popup.RemoveFromTaskbar(winTitle)
-            popup.MoveNearTray(winTitle) // первичная позиция до первого показа
+            popup.LockResize(winTitle)  // строго фиксированный размер
+            popup.MoveNearTray(winTitle)
+            popup.RoundCorners(winTitle)
+        },
+        // «Стекло» + прозрачность под скруглённые углы.
+        Windows: &windows.Options{
+            WebviewIsTransparent:              true,
+            WindowIsTranslucent:               true,
+            DisableFramelessWindowDecorations: true,
         },
         Bind: []interface{}{appCore},
     })
