@@ -62,7 +62,6 @@ function applyDict(dict) {
   document.querySelectorAll("[data-i18n-title]").forEach(el => { el.title = t(el.dataset.i18nTitle); });
   document.title = t("app.title");
 
-  // Провайдеры в открытом селекте настроек — переименовать на новом языке.
   const provSel = $("set-provider");
   if (provSel) {
     for (const o of provSel.options) {
@@ -70,7 +69,6 @@ function applyDict(dict) {
     }
   }
 
-  // Динамические тексты главного окна.
   if (S.err) {
     $("upd-badge").textContent = t("rates.error");
   } else {
@@ -101,6 +99,72 @@ function fmtTime(d) {
 function fmtQuoteDate(iso) {
   if (!iso || iso.length < 10) return null;
   return `${iso.slice(8, 10)}.${iso.slice(5, 7)}`;
+}
+
+/* ------------------- ввод сумм с группировкой тысяч ---------------------- */
+/* Поле форматируется прямо во время набора: "24000,5" → "24 000,5".
+ * Курсор привязывается к количеству цифр слева от него, поэтому печать
+ * в середине числа не «прыгает» в конец. */
+
+function cleanAmountString(s) {
+  s = s.replace(/[^\d.,]/g, "").replace(/\./g, ","); // только цифры и разделители
+  const c = s.indexOf(",");                          // запятая может быть только одна
+  if (c !== -1) s = s.slice(0, c + 1) + s.slice(c + 1).replace(/,/g, "");
+  return s;
+}
+
+function groupThousands(s) {
+  const c = s.indexOf(",");
+  const intPart = c === -1 ? s : s.slice(0, c);
+  const frac = c === -1 ? "" : s.slice(c); // дробная часть — как набрал пользователь
+  return intPart.replace(/\B(?=(\d{3})+(?!\d))/g, " ") + frac;
+}
+
+/* formatAmountInput(el, caretPos): caretPos — позиция курсора в el.value
+ * ДО перезаписи (на input-событии это текущий selectionStart). */
+function formatAmountInput(el, caretPos) {
+  if (caretPos == null) caretPos = el.value.length;
+  const raw = el.value;
+  let digitsBefore = 0;
+  for (let i = 0; i < caretPos && i < raw.length; i++) {
+    if (raw[i] >= "0" && raw[i] <= "9") digitsBefore++;
+  }
+  const cleaned = cleanAmountString(raw);
+  const formatted = groupThousands(cleaned);
+  el.value = formatted;
+
+  const totalDigits = (cleaned.match(/\d/g) || []).length;
+  let newCaret;
+  if (digitsBefore === 0) {
+    newCaret = 0;
+  } else if (digitsBefore >= totalDigits) {
+    newCaret = formatted.length;
+  } else {
+    let seen = 0;
+    newCaret = formatted.length;
+    for (let i = 0; i < formatted.length; i++) {
+      if (formatted[i] >= "0" && formatted[i] <= "9") {
+        seen++;
+        if (seen === digitsBefore) { newCaret = i + 1; break; }
+      }
+    }
+  }
+  el.setSelectionRange(newCaret, newCaret);
+}
+
+/* Backspace перед пробелом-разделителем удаляет ЦИФРУ перед пробелом,
+ * а не сам пробел — иначе разделитель «воскресает» при перегруппировке
+ * и цифру нельзя стереть с первого нажатия. */
+function amountKeydown(e) {
+  if (e.key !== "Backspace") return;
+  const el = e.target;
+  const s = el.selectionStart, en = el.selectionEnd;
+  if (s === null || s !== en || s < 2) return; // s<2: перед пробелом нет цифры
+  if (el.value[s - 1] !== " ") return;
+  e.preventDefault();
+  el.value = el.value.slice(0, s - 2) + el.value.slice(s - 1);
+  formatAmountInput(el, s - 1);
+  recalc();
 }
 
 /* ------------------------------ расчёты --------------------------------- */
@@ -171,10 +235,7 @@ function doSwap() {
 }
 
 /* Верхняя кнопка ⇄: развернуть операцию — значения обмениваются между полями
- * вместе с валютами: 100 RUB → 525,3784 KZT  ⇒  525,3784 KZT → 100 RUB.
- * Новым источником становится левое поле (оно же — поле ввода) с тем числом,
- * что было выведено справа. Если справа нечего парсить (нет курса) —
- * просто разворачиваем пару. toPrecision(10) убирает float-шум. */
+ * вместе с валютами: 100 RUB → 525,3784 KZT  ⇒  525,3784 KZT → 100 RUB. */
 function doSwapAll() {
   const v = parseAmt($("out-result").value);
   [S.left, S.right] = [S.right, S.left];
@@ -183,7 +244,9 @@ function doSwapAll() {
   if (!isNaN(v)) {
     const clean = String(parseFloat(v.toPrecision(10)));
     S.amountSide = "left";
-    $("in-amount").value = clean;
+    const el = $("in-amount");
+    el.value = clean;
+    formatAmountInput(el); // сразу с группировкой тысяч
   }
   recalc();
 }
@@ -392,8 +455,8 @@ async function populateSettings() {
   for (const p of st.providers ?? []) {
     const o = document.createElement("option");
     o.value = p.key;
-    o.textContent = providerLabel(p);   // перевод по словарю текущего языка
-    o.dataset.name = p.name;            // каноническое имя — для переименования при смене языка
+    o.textContent = providerLabel(p);
+    o.dataset.name = p.name;
     provSel.appendChild(o);
   }
   provSel.value = saved.provider;
@@ -420,8 +483,15 @@ async function openSettings() {
 }
 
 /* ------------------------------ события UI ------------------------------- */
- $("in-amount").addEventListener("input", () => { S.amountSide = "left"; recalc(); });
- $("out-result").addEventListener("input", () => { S.amountSide = "right"; recalc(); });
+/* Поля сумм: живое форматирование с сохранением курсора + умный Backspace. */
+for (const [el, side] of [[$("in-amount"), "left"], [$("out-result"), "right"]]) {
+  el.addEventListener("input", () => {
+    formatAmountInput(el, el.selectionStart); // курсор ДО перезаписи значения
+    S.amountSide = side;
+    recalc();
+  });
+  el.addEventListener("keydown", amountKeydown);
+}
  $("sel-left").addEventListener("change", e => { S.left = e.target.value; recalc(); });
  $("sel-right").addEventListener("change", e => { S.right = e.target.value; recalc(); });
  $("swap-amt").addEventListener("click", doSwapAll); // верхняя: суммы + валюты
@@ -455,7 +525,7 @@ for (const id of ["set-left", "set-right", "set-interval", "set-provider", "set-
     closeConfirm();
     showToast(t("toast.applied"));
     if (ctx === "back") showMode("main");
-  } catch (e) { alert(tErr(e)); } // диалог остаётся открытым
+  } catch (e) { alert(tErr(e)); }
 });
  $("confirm-no").addEventListener("click", () => {
   const ctx = confirmCtx;
@@ -517,7 +587,7 @@ document.querySelectorAll(".tab").forEach(btn => btn.addEventListener("click", (
 (async function init() {
   try {
     const st = await window.go.app.App.GetInitState();
-    applyDict(st.i18n);        // словарь ДО первого рендера
+    applyDict(st.i18n);
     applyTheme(st.config.theme);
     S.names = st.update.names ?? {};
     S.left = st.config.base_currency; S.right = st.config.target_currency;
