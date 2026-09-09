@@ -152,18 +152,35 @@ function formatAmountInput(el, caretPos) {
   el.setSelectionRange(newCaret, newCaret);
 }
 
-/* Backspace перед пробелом-разделителем удаляет ЦИФРУ перед пробелом,
- * а не сам пробел — иначе разделитель «воскресает» при перегруппировке
- * и цифру нельзя стереть с первого нажатия. */
+/* Умное удаление в полях сумм:
+ * — Backspace, когда курсор сразу ПОСЛЕ пробела-разделителя: удаляет ЦИФРУ
+ *   перед пробелом (иначе пробел «воскресает» при перегруппировке).
+ * — Delete, когда курсор сразу ПЕРЕД пробелом: удаляет ЦИФРУ после пробела
+ *   (зеркальный случай — нативно удалился бы только пробел).
+ * Выделение и все остальные позиции обрабатываются браузером нативно,
+ * после чего input-событие само переформатирует строку. */
 function amountKeydown(e) {
-  if (e.key !== "Backspace") return;
+  if (e.key !== "Backspace" && e.key !== "Delete") return;
   const el = e.target;
   const s = el.selectionStart, en = el.selectionEnd;
-  if (s === null || s !== en || s < 2) return; // s<2: перед пробелом нет цифры
-  if (el.value[s - 1] !== " ") return;
+  if (s === null || s !== en) return; // есть выделение — нативное поведение ок
+
+  if (e.key === "Backspace") {
+    if (s < 2 || el.value[s - 1] !== " ") return;
+    e.preventDefault();
+    // убрать цифру перед пробелом и сам пробел
+    el.value = el.value.slice(0, s - 2) + el.value.slice(s - 1);
+    formatAmountInput(el, s - 1); // курсор считаем в уже новой строке
+    recalc();
+    return;
+  }
+
+  // Delete: курсор перед пробелом → удалить цифру после пробела
+  if (el.value[s] !== " " || s + 1 >= el.value.length) return;
   e.preventDefault();
-  el.value = el.value.slice(0, s - 2) + el.value.slice(s - 1);
-  formatAmountInput(el, s - 1);
+  // убрать сам пробел и цифру после него
+  el.value = el.value.slice(0, s) + el.value.slice(s + 2);
+  formatAmountInput(el, s);
   recalc();
 }
 
@@ -473,7 +490,7 @@ async function populateSettings() {
   }
   langSel.value = saved.lang;
 
-  $("ver").textContent = "v0.1.0";
+  $("ver").textContent = "v" + (st.version || "dev");
   updateDirtyUI();
 }
 

@@ -24,6 +24,7 @@ func (a *App) GetInitState() InitPayload {
     }
 
     return InitPayload{
+        Version:     Version,
         Config:      cfgCopy,
         AutoEnabled: autostartEnabled(),
         CooldownSec: cooldownSec,

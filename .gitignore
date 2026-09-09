@@ -5,6 +5,7 @@
 *.dll
 *.so
 *.dylib
+*.syso
 
 # Артефакты сборки фронтенда
 /frontend/node_modules/

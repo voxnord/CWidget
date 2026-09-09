@@ -12,6 +12,12 @@ import (
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
+// Version — версия приложения ("1.2.3" или "1.2.3+3f2a1c9").
+// Прописывается скриптом сборки через ldflags:
+//   -ldflags "-X <module>/app.Version=1.2.3"
+// Значение "dev" означает запуск из исходников (wails dev / go run) без сборки.
+var Version = "dev"
+
 // WindowTitle — уникальный заголовок окна. Задаётся из main.go ДО wails.Run:
 // popup-модуль ищет окно по заголовку (убрать из таскбара, поставить у трея).
 var WindowTitle string
@@ -32,6 +38,7 @@ type ratesUpdate struct {
 }
 
 type InitPayload struct {
+    Version     string               `json:"version"`   // версия сборки (для «О программе»)
     Config      config.Config        `json:"config"`
     AutoEnabled bool                 `json:"autostart_enabled"`
     CooldownSec int                  `json:"cooldown_sec"` // остаток кулдауна обновления
