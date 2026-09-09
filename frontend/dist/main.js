@@ -73,6 +73,19 @@ function setArr(el, dir) {
   el.className = "arr " + (dir ?? "flat");
 }
 
+/* Выбор доступного кода: предпочитаемый, если есть у источника;
+ * иначе ходовые USD/EUR/RUB; иначе первый по алфавиту имён. */
+function codesFallback(pref, names, taken) {
+  names = names ?? {};
+  if (pref && names[pref] && pref !== taken) return pref;
+  for (const c of ["USD", "EUR", "RUB"]) {
+    if (names[c] && c !== taken) return c;
+  }
+  const keys = Object.keys(names).sort((a, b) =>
+    String(names[a]).localeCompare(String(names[b]), "ru"));
+  return keys.find(c => c !== taken) ?? pref ?? "";
+}
+
 /* ------------------------------- отрисовка ------------------------------- */
 function recalc() {
   const calcLR = pair(S.left, S.right);
@@ -111,7 +124,7 @@ function fillSelect(sel, value) {
 
 function applyUpdate(p) {
   if (p?.table) S.table = p.table;
-  if (p?.names) S.names = p.names;
+  if (p?.names) S.names = p.names; // строгая замена: набор валют текущего провайдера
   const badge = $("upd-badge");
   if (S.table?.fetched_at) {
     let txt = `обн. ${fmtTime(new Date(S.table.fetched_at))}`;
@@ -121,6 +134,14 @@ function applyUpdate(p) {
     badge.classList.remove("err");
   }
   $("src-badge").textContent = S.table?.source ?? "—";
+
+  // Выбранная пара недоступна у этого источника (например, KZT у Frankfurter)?
+  // Подбираем доступную пару вместо «курс недоступен».
+  if (Object.keys(S.names ?? {}).length && !pair(S.left, S.right)) {
+    const nl = codesFallback(S.left, S.names);
+    const nr = codesFallback(S.right, S.names, nl);
+    if (nl && nr && nl !== nr) { S.left = nl; S.right = nr; }
+  }
   fillSelect($("sel-left"), S.left);
   fillSelect($("sel-right"), S.right);
   recalc();
@@ -183,14 +204,40 @@ function setMode(mode) {
   if (mode === "main") recalc();
 }
 
+/* Списки валют в ОТКРЫТЫХ настройках подтягиваются под нового провайдера.
+ * Вызывается при каждом rates:update; выбор сохраняется, если он есть
+ * у нового источника, иначе подставляется доступный. */
+function syncSettingsCurrencies() {
+  if ($("view-settings").hidden) return;
+  const l = $("set-left").value;
+  const r = $("set-right").value;
+  const nl = codesFallback(l, S.names);
+  const nr = codesFallback(r, S.names, nl);
+  fillSelect($("set-left"), nl);
+  fillSelect($("set-right"), nr);
+}
+
+/* Заполнение настроек — при ЛЮБОМ способе их открытия
+ * (и кнопкой-шестерёнкой, и пунктом меню трея). */
 async function populateSettings() {
   const st = await window.go.app.App.GetInitState();
-  S.names = Object.assign({}, st.update.names ?? {}, S.names);
+  // СТРОГО словарь текущего провайдера — никакой подмеси от предыдущих.
+  S.names = st.update.names ?? {};
   fillSelect($("set-left"), st.config.base_currency);
   fillSelect($("set-right"), st.config.target_currency);
+  // Если дефолтная пара из конфига отсутствует у текущего источника —
+  // сразу показываем доступную (иначе «Сохранить» зафиксирует пустую пару).
+  const nl = codesFallback(st.config.base_currency, S.names);
+  const nr = codesFallback(st.config.target_currency, S.names, nl);
+  if (nl && nr) {
+    fillSelect($("set-left"), nl);
+    fillSelect($("set-right"), nr);
+  }
+
   $("set-interval").value = String(st.config.refresh_interval_minutes);
   $("set-autostart").setAttribute("aria-checked", String(st.autostart_enabled));
 
+  // Список источников из реестра провайдеров — новый появляется сам.
   const provSel = $("set-provider");
   provSel.innerHTML = "";
   for (const p of st.providers ?? []) {
@@ -221,7 +268,8 @@ async function openSettings() {
  $("btn-settings").addEventListener("click", () => openSettings());
  $("btn-back").addEventListener("click", () => showMode("main"));
 
-/* Смена источника применяется сразу; данные нового провайдера подтянутся сами. */
+/* Смена источника применяется сразу; списки валют обновятся сами,
+ * когда придёт rates:update с данными нового провайдера. */
  $("set-provider").addEventListener("change", async e => {
   const key = e.target.value;
   const name = e.target.selectedOptions[0]?.textContent ?? key;
@@ -240,7 +288,7 @@ async function openSettings() {
   const t = e.target.value;
   try {
     await window.go.app.App.SetTheme(t);
-    applyTheme(t); // событие theme:changed придёт и так — это мгновенный отклик
+    applyTheme(t);
     showToast(t === "light" ? "Тема: светлая" : "Тема: тёмная");
   } catch (err) { alert(err); }
 });
@@ -252,7 +300,10 @@ window.runtime?.EventsOn?.("ui:mode", m => {
 });
 
 /* события от бэкенда */
-window.runtime?.EventsOn?.("rates:update", p => applyUpdate(p));
+window.runtime?.EventsOn?.("rates:update", p => {
+  applyUpdate(p);
+  syncSettingsCurrencies(); // ← открытые настройки подтягивают валюты нового провайдера
+});
 window.runtime?.EventsOn?.("rates:error", () => {
   const b = $("upd-badge");
   b.textContent = "нет связи";
@@ -295,7 +346,7 @@ document.querySelectorAll(".tab").forEach(btn => btn.addEventListener("click", (
 (async function init() {
   try {
     const st = await window.go.app.App.GetInitState();
-    applyTheme(st.config.theme); // тема до первого показа окна
+    applyTheme(st.config.theme);
     S.names = st.update.names ?? {};
     S.left = st.config.base_currency; S.right = st.config.target_currency;
     applyUpdate(st.update);
