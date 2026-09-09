@@ -7,6 +7,14 @@ const S = {
   table: null, names: {},
 };
 
+/* Снапшот СОХРАНЁННЫХ настроек (что реально лежит в config.json / применено).
+ * null, пока настройки ни разу не открывались в этой сессии. */
+let saved = null;
+
+/* Контекст диалога: 'back' — выход в конвертер по «Назад»,
+ * 'reopen' — окно было скрыто с несохранёнными правками и открыто снова. */
+let confirmCtx = null;
+
 /* ---------------- Popup-поведение: скрытие при потере фокуса ---------------- */
 let hideGuardUntil = 0;
 const armHideGuard = (ms = 700) => { hideGuardUntil = Date.now() + ms; };
@@ -135,8 +143,6 @@ function applyUpdate(p) {
   }
   $("src-badge").textContent = S.table?.source ?? "—";
 
-  // Выбранная пара недоступна у этого источника (например, KZT у Frankfurter)?
-  // Подбираем доступную пару вместо «курс недоступен».
   if (Object.keys(S.names ?? {}).length && !pair(S.left, S.right)) {
     const nl = codesFallback(S.left, S.names);
     const nr = codesFallback(S.right, S.names, nl);
@@ -201,32 +207,104 @@ function endCooldownUI() {
 function setMode(mode) {
   $("view-main").hidden = mode === "settings";
   $("view-settings").hidden = mode === "main";
-  if (mode === "main") recalc();
+  if (mode === "main") {
+    closeConfirm(); // диалог живёт только внутри настроек; правки остаются ждать
+    recalc();
+  }
 }
 
-/* Списки валют в ОТКРЫТЫХ настройках подтягиваются под нового провайдера.
- * Вызывается при каждом rates:update; выбор сохраняется, если он есть
- * у нового источника, иначе подставляется доступный. */
+/* Списки валют в ОТКРЫТЫХ настройках подтягиваются под нового провайдера. */
 function syncSettingsCurrencies() {
   if ($("view-settings").hidden) return;
+  if (!$("confirm-overlay").hidden) return; // открыт диалог — контролы не трогаем
   const l = $("set-left").value;
   const r = $("set-right").value;
   const nl = codesFallback(l, S.names);
   const nr = codesFallback(r, S.names, nl);
   fillSelect($("set-left"), nl);
   fillSelect($("set-right"), nr);
+  updateDirtyUI();
 }
 
-/* Заполнение настроек — при ЛЮБОМ способе их открытия
- * (и кнопкой-шестерёнкой, и пунктом меню трея). */
+/* ------------- настройки: снапшот, «грязность», подтверждение ------------- */
+
+function snapshotFromState(st) {
+  return {
+    base: st.config.base_currency,
+    target: st.config.target_currency,
+    interval: String(st.config.refresh_interval_minutes),
+    provider: st.provider ?? "",
+    theme: st.config.theme === "light" ? "light" : "dark",
+  };
+}
+
+/* Есть ли неподтверждённые правки. Тумблер автозапуска сюда не входит:
+ * он применяется мгновенно и на «грязность» не влияет. */
+function computeDirty() {
+  if (!saved) return false;
+  return (
+    $("set-left").value !== saved.base ||
+    $("set-right").value !== saved.target ||
+    $("set-interval").value !== saved.interval ||
+    $("set-provider").value !== saved.provider ||
+    $("set-theme").value !== saved.theme
+  );
+}
+
+function updateDirtyUI() {
+  const dirty = computeDirty();
+  $("btn-save").classList.toggle("dirty", dirty);
+  return dirty;
+}
+
+function openConfirm(ctx) {
+  confirmCtx = ctx;
+  $("confirm-overlay").hidden = false;
+}
+
+function closeConfirm() {
+  $("confirm-overlay").hidden = true;
+  confirmCtx = null;
+}
+
+/* Применить всё выбранное в настройках (кроме автозапуска — он мгновенный). */
+async function applyPending() {
+  const base = $("set-left").value;
+  const target = $("set-right").value;
+  const minutes = parseInt($("set-interval").value, 10);
+  await window.go.app.App.SetDefaults(base, target, minutes); // валидация внутри
+
+  const provider = $("set-provider").value;
+  if (provider !== saved.provider) {
+    await window.go.app.App.SetProvider(provider);
+  }
+  const theme = $("set-theme").value;
+  if (theme !== saved.theme) {
+    await window.go.app.App.SetTheme(theme);
+  }
+  saved = { base, target, interval: String(minutes), provider, theme };
+  updateDirtyUI();
+}
+
+/* Откатить контролы к сохранённым значениям (кнопка «Нет»). */
+function revertPending() {
+  fillSelect($("set-left"), saved.base);
+  fillSelect($("set-right"), saved.target);
+  $("set-interval").value = saved.interval;
+  $("set-provider").value = saved.provider;
+  $("set-theme").value = saved.theme;
+  updateDirtyUI();
+}
+
+/* Заполнение настроек — при открытии «с нуля» (без несохранённых правок). */
 async function populateSettings() {
   const st = await window.go.app.App.GetInitState();
-  // СТРОГО словарь текущего провайдера — никакой подмеси от предыдущих.
+  saved = snapshotFromState(st);
+  // СТРОГО словарь текущего провайдера — без подмеси от предыдущих.
   S.names = st.update.names ?? {};
   fillSelect($("set-left"), st.config.base_currency);
   fillSelect($("set-right"), st.config.target_currency);
-  // Если дефолтная пара из конфига отсутствует у текущего источника —
-  // сразу показываем доступную (иначе «Сохранить» зафиксирует пустую пару).
+  // Если дефолтная пара отсутствует у текущего источника — показываем доступную.
   const nl = codesFallback(st.config.base_currency, S.names);
   const nr = codesFallback(st.config.target_currency, S.names, nl);
   if (nl && nr) {
@@ -234,10 +312,9 @@ async function populateSettings() {
     fillSelect($("set-right"), nr);
   }
 
-  $("set-interval").value = String(st.config.refresh_interval_minutes);
+  $("set-interval").value = saved.interval;
   $("set-autostart").setAttribute("aria-checked", String(st.autostart_enabled));
 
-  // Список источников из реестра провайдеров — новый появляется сам.
   const provSel = $("set-provider");
   provSel.innerHTML = "";
   for (const p of st.providers ?? []) {
@@ -246,11 +323,11 @@ async function populateSettings() {
     o.textContent = p.name;
     provSel.appendChild(o);
   }
-  provSel.value = st.provider ?? "";
+  provSel.value = saved.provider;
 
-  $("set-theme").value = st.config.theme === "light" ? "light" : "dark";
-
+  $("set-theme").value = saved.theme;
   $("ver").textContent = "v0.1.0";
+  updateDirtyUI();
 }
 
 async function openSettings() {
@@ -266,43 +343,63 @@ async function openSettings() {
  $("swap-cur").addEventListener("click", doSwap);
  $("btn-refresh").addEventListener("click", () => window.go.app.App.ManualRefresh());
  $("btn-settings").addEventListener("click", () => openSettings());
- $("btn-back").addEventListener("click", () => showMode("main"));
 
-/* Смена источника применяется сразу; списки валют обновятся сами,
- * когда придёт rates:update с данными нового провайдера. */
- $("set-provider").addEventListener("change", async e => {
-  const key = e.target.value;
-  const name = e.target.selectedOptions[0]?.textContent ?? key;
-  try {
-    await window.go.app.App.SetProvider(key);
-    showToast(`Источник: ${name}`);
-  } catch (err) {
-    alert(err);
-    const st = await window.go.app.App.GetInitState();
-    e.target.value = st.provider ?? "";
+/* Выход из настроек: с правками — через подтверждение, без — сразу. */
+ $("btn-back").addEventListener("click", () => {
+  if (computeDirty()) {
+    openConfirm("back");
+    return;
   }
+  showMode("main");
 });
 
-/* Смена темы применяется сразу. */
- $("set-theme").addEventListener("change", async e => {
-  const t = e.target.value;
+/* Любое изменение подтверждаемых настроек — только помечаем «грязность».
+ * (Автозапуск — исключение, обрабатывается отдельно и мгновенно.) */
+for (const id of ["set-left", "set-right", "set-interval", "set-provider", "set-theme"]) {
+  $(id).addEventListener("change", updateDirtyUI);
+}
+
+/* Кнопка «Сохранить» = применить всё выбранное (остаёмся в настройках). */
+ $("btn-save").addEventListener("click", async () => {
   try {
-    await window.go.app.App.SetTheme(t);
-    applyTheme(t);
-    showToast(t === "light" ? "Тема: светлая" : "Тема: тёмная");
-  } catch (err) { alert(err); }
+    await applyPending();
+    showToast("Сохранено");
+  } catch (e) { alert(e); }
+});
+
+/* Диалог подтверждения */
+ $("confirm-yes").addEventListener("click", async () => {
+  const ctx = confirmCtx;
+  try {
+    await applyPending();
+    closeConfirm();
+    showToast("Настройки применены");
+    if (ctx === "back") showMode("main"); // «reopen» — остаёмся в настройках
+  } catch (e) { alert(e); } // ошибка валидации — диалог остаётся открытым
+});
+ $("confirm-no").addEventListener("click", () => {
+  const ctx = confirmCtx;
+  revertPending(); // «нет» — ничего не изменяется
+  closeConfirm();
+  if (ctx === "back") showMode("main");
 });
 
 /* команды режима приходят с бэкенда (трей → ShowMode → событие) */
 window.runtime?.EventsOn?.("ui:mode", m => {
   setMode(m);
-  if (m === "settings") populateSettings();
+  if (m === "settings") {
+    if (computeDirty()) {
+      openConfirm("reopen"); // вернулись к неотправленным правкам — спросим
+    } else {
+      populateSettings();
+    }
+  }
 });
 
 /* события от бэкенда */
 window.runtime?.EventsOn?.("rates:update", p => {
   applyUpdate(p);
-  syncSettingsCurrencies(); // ← открытые настройки подтягивают валюты нового провайдера
+  syncSettingsCurrencies();
 });
 window.runtime?.EventsOn?.("rates:error", () => {
   const b = $("upd-badge");
@@ -328,13 +425,6 @@ document.querySelectorAll(".tab").forEach(btn => btn.addEventListener("click", (
   $("tab-about").hidden = btn.dataset.tab !== "about";
 }));
 
- $("btn-save").addEventListener("click", async () => {
-  try {
-    await window.go.app.App.SetDefaults(
-      $("set-left").value, $("set-right").value, parseInt($("set-interval").value, 10));
-    showToast("Сохранено");
-  } catch (e) { alert(e); }
-});
  $("set-autostart").addEventListener("click", async () => {
   const st = await window.go.app.App.GetInitState();
   const nxt = !st.autostart_enabled;

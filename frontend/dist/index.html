@@ -107,6 +107,21 @@
     <div id="toast" class="toast">Сохранено</div>
   </section>
 </main>
+
+<!-- ======================= ПОДТВЕРЖДЕНИЕ ======================= -->
+<!-- Живёт внутри того же webview: всегда поверх окна виджета,
+     стилизуется теми же переменными тем. -->
+<div id="confirm-overlay" class="confirm-overlay" hidden>
+  <div class="confirm" role="dialog" aria-modal="true">
+    <p class="confirm-title">Применить изменения?</p>
+    <p class="confirm-text">Настройки были изменены. Сохранить новые значения?</p>
+    <div class="confirm-actions">
+      <button id="confirm-yes" class="primary">Да</button>
+      <button id="confirm-no" class="ghost">Нет</button>
+    </div>
+  </div>
+</div>
+
 <script src="/main.js"></script>
 </body>
 </html>

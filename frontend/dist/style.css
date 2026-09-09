@@ -5,9 +5,7 @@
   --btn:#262a37; --btn-hover:#33384a;
   --knob:#8891a8; --toast:#262a37;
   --win-bg:rgba(21,22,28,.97);
-  /* Волоска по краю окна: на Win10 регион режется без сглаживания,
-   * и разрез проходит ровно по этой тёмной линии — ступенька прячется в неё. */
-  --edge:rgba(0,0,0,.35);
+  --edge:rgba(0,0,0,.5);
   --edge-soft:rgba(0,0,0,.22);
 }
 body.light{
@@ -22,17 +20,11 @@ body.light{
 }
 *{box-sizing:border-box;margin:0;padding:0;font-family:'Segoe UI',system-ui,sans-serif}
 [hidden]{display:none!important}
-/* Прозрачный html обязателен: углы окна вырезаются border-radius на body,
- * сквозь них виден рабочий стол (окно прозрачное — см. main.go). */
 html{background:transparent}
 html,body{height:100%}
 body{
   overflow:hidden;color:var(--txt);font-size:13px;user-select:none;
-  border-radius:10px;background:var(--win-bg);
-  /* Внутренняя волоска (1px) + мягкое затемнение 3px = имитация антиалиасинга:
-   * жёсткий край GDI-региона (Win10) попадает на эту линию и не читается
-   * как ступенька. На Win11 края гладкие благодаря DWM, линия остаётся
-   * как элемент дизайна. */
+  border-radius:14px;background:var(--win-bg);
   box-shadow:inset 0 0 0 1px var(--edge), inset 0 0 3px 1px var(--edge-soft);
 }
 
@@ -83,7 +75,19 @@ select{width:100%;background:var(--panel);border:1px solid var(--line);border-ra
 .toggle[aria-checked="true"]::after{left:22px;background:#fff}
 .primary{margin-top:6px;padding:8px;border:none;border-radius:8px;background:var(--accent);color:#fff;font-weight:600;cursor:pointer}
 .primary:hover{filter:brightness(1.1)}
+/* Индикатор несохранённых изменений на кнопке «Сохранить» */
+.primary.dirty::after{content:" •"}
 .about{color:var(--dim);font-size:12px;line-height:1.5}
 .toast{position:absolute;left:50%;bottom:12px;transform:translateX(-50%) translateY(20px);opacity:0;background:var(--toast);color:var(--txt);border:1px solid var(--line);border-radius:8px;padding:5px 14px;transition:.25s;pointer-events:none}
 .toast.show{opacity:1;transform:translateX(-50%)}
 a{color:var(--accent)}
+
+/* диалог подтверждения — внутри окна виджета, поверх всего содержимого */
+.confirm-overlay{position:fixed;inset:0;z-index:100;display:flex;align-items:center;justify-content:center;background:rgba(8,10,16,.55)}
+.confirm{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:16px;width:calc(100% - 56px);display:flex;flex-direction:column;gap:8px;box-shadow:0 12px 32px rgba(0,0,0,.45)}
+.confirm-title{font-weight:600;font-size:14px}
+.confirm-text{color:var(--dim);font-size:12px;line-height:1.4}
+.confirm-actions{display:flex;gap:8px;margin-top:6px}
+.confirm-actions .primary{margin-top:0;flex:1}
+.ghost{flex:1;padding:8px;border:none;border-radius:8px;background:var(--btn);color:var(--txt);font-weight:600;cursor:pointer}
+.ghost:hover{background:var(--btn-hover)}
