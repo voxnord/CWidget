@@ -43,10 +43,14 @@ func (a *App) BackgroundRefresh(manual bool) {
 
     if err != nil {
         a.scheduleRetry() // сеть/API легли — вернёмся раньше планового тика
-        return
+    } else {
+        a.failures.Store(0)
+        a.cancelRetry()
     }
-    a.failures.Store(0)
-    a.cancelRetry()
+
+    if manual {
+        a.startCooldown(time.Minute) // кулдаун только для ручных нажатий
+    }
 }
 
 // scheduleRetry — backoff: 30 c, 1 мин, 2 мин, 4 мин, 8 мин, далее кап 10 мин.
