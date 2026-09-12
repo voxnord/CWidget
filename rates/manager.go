@@ -8,7 +8,15 @@ import (
 	"os"
 	"sync"
 	"sync/atomic"
+	"time"
 )
+
+// FetchTimeoutPerProvider — жёсткий лимит на ОДНУ попытку одного провайдера.
+// Без него зависший/недоступный источник съедал бы весь таймаут http-клиента
+// (15 с) до перехода каскада к резерву, и пользователь смотрел бы на
+// «Обновление…» непозволительно долго. Frankfurter (3 запроса за Fetch)
+// укладывается в лимит с запасом.
+const FetchTimeoutPerProvider = 8 * time.Second
 
 // Registration — связка стабильного ключа провайдера и его реализации.
 // Ключ хранится в конфиге и не зависит от человекочитаемого имени (Name()).
@@ -23,6 +31,18 @@ type ProviderInfo struct {
     Name string `json:"name"`
 }
 
+// ProviderStatus — исход последней попытки конкретного провайдера.
+// Заполняется менеджером при каждом Fetch; предназначен для диагностики в UI.
+type ProviderStatus struct {
+    Key       string    `json:"key"`
+    Name      string    `json:"name"`
+    Tried     bool      `json:"tried"`                // была ли хоть одна попытка
+    OK        bool      `json:"ok"`                   // исход последней попытки
+    LastErr   string    `json:"last_err,omitempty"`   // полный текст последней ошибки
+    LastErrAt time.Time `json:"last_err_at,omitempty"`
+    LastOKAt  time.Time `json:"last_ok_at,omitempty"`
+}
+
 // Manager хранит последний удачный снимок, распределяет запросы по провайдерам
 // и переживает рестарты благодаря дисковому кэшу.
 //
@@ -35,12 +55,13 @@ type Manager struct {
     regs      []Registration
     preferred string // ключ выбранного провайдера (всегда непустой, см. main.go)
     current   *Table
+    statuses  map[string]*ProviderStatus
     cachePath string
     busy      atomic.Bool
 }
 
 func NewManager(regs []Registration, cachePath string) (*Manager, error) {
-    m := &Manager{regs: regs, cachePath: cachePath}
+    m := &Manager{regs: regs, cachePath: cachePath, statuses: map[string]*ProviderStatus{}}
     if b, err := os.ReadFile(cachePath); err == nil {
         var cached Table
         if json.Unmarshal(b, &cached) == nil && cached.Anchor != "" && len(cached.Points) > 0 {
@@ -90,6 +111,44 @@ func (m *Manager) Providers() []ProviderInfo {
     return out
 }
 
+// Statuses — снапшот состояний всех провайдеров (для диагностики в настройках).
+func (m *Manager) Statuses() []ProviderStatus {
+    m.mu.RLock()
+    defer m.mu.RUnlock()
+    out := make([]ProviderStatus, 0, len(m.regs))
+    for _, r := range m.regs {
+        if st, ok := m.statuses[r.Key]; ok && st != nil {
+            cp := *st
+            cp.Key, cp.Name = r.Key, r.Provider.Name()
+            out = append(out, cp)
+            continue
+        }
+        out = append(out, ProviderStatus{Key: r.Key, Name: r.Provider.Name()})
+    }
+    return out
+}
+
+// recordStatus фиксирует исход попытки (вызывать под Lock не нужно — сам берёт Lock).
+func (m *Manager) recordStatus(key string, err error) {
+    m.mu.Lock()
+    defer m.mu.Unlock()
+    st, ok := m.statuses[key]
+    if !ok {
+        st = &ProviderStatus{}
+        m.statuses[key] = st
+    }
+    st.Tried = true
+    if err != nil {
+        st.OK = false
+        st.LastErr = err.Error()
+        st.LastErrAt = time.Now()
+        return
+    }
+    st.OK = true
+    st.LastErr = ""
+    st.LastOKAt = time.Now()
+}
+
 // ordered — порядок обхода: выбранный первым, остальные резервом.
 func (m *Manager) ordered() []Registration {
     m.mu.RLock()
@@ -115,6 +174,7 @@ func (m *Manager) ordered() []Registration {
 
 // TryRefresh проходит провайдеров по порядку; первый удачный снимок становится текущим
 // и ПОЛНОСТЬЮ заменяет прежний (вместе с набором валют и имён).
+// Каждая попытка ограничена FetchTimeoutPerProvider независимо от остальных.
 func (m *Manager) TryRefresh(ctx context.Context) (*Table, error) {
     if !m.busy.CompareAndSwap(false, true) {
         if t, ok := m.Current(); ok {
@@ -128,7 +188,10 @@ func (m *Manager) TryRefresh(ctx context.Context) (*Table, error) {
         if err := ctx.Err(); err != nil {
             return nil, err
         }
-        tbl, err := reg.Provider.Fetch(ctx)
+        fctx, cancel := context.WithTimeout(ctx, FetchTimeoutPerProvider)
+        tbl, err := reg.Provider.Fetch(fctx)
+        cancel()
+        m.recordStatus(reg.Key, err)
         if err != nil {
             lastErr = fmt.Errorf("%s: %w", reg.Provider.Name(), err)
             continue

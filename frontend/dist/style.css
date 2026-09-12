@@ -7,6 +7,7 @@
   --win-bg:rgba(21,22,28,.97);
   --edge:rgba(0,0,0,.5);
   --edge-soft:rgba(0,0,0,.22);
+  --warn:#f0b429;
 }
 body.light{
   --panel:#ffffff; --line:#d8dbe4; --txt:#1d2029; --dim:#5f6575;
@@ -17,6 +18,7 @@ body.light{
   --win-bg:rgba(246,247,251,.97);
   --edge:rgba(0,0,0,.20);
   --edge-soft:rgba(0,0,0,.08);
+  --warn:#b45309;
 }
 *{box-sizing:border-box;margin:0;padding:0;font-family:'Segoe UI',system-ui,sans-serif}
 [hidden]{display:none!important}
@@ -34,6 +36,7 @@ body{
 
 .topbar{display:flex;align-items:center;gap:8px;padding:16px 16px 8px;cursor:default}
 .src{background:var(--chip);color:var(--chip-txt);padding:1px 7px;border-radius:8px;font-size:11px}
+.src-warn{color:var(--warn);font-size:12px;line-height:1;cursor:help}
 .upd{flex:1;color:var(--dim);font-size:11px;text-align:right}
 .upd.err{color:var(--down)}
 .tools{display:flex;gap:6px}
@@ -69,6 +72,10 @@ select{width:100%;background:var(--panel);border:1px solid var(--line);border-ra
 .tabpane{padding:12px 16px;display:flex;flex-direction:column;gap:9px}
 .lbl{color:var(--dim);font-size:11px}
 .defpair{display:flex;gap:8px;align-items:center}
+.prov-status{display:flex;flex-wrap:wrap;gap:4px 12px;font-size:11px;color:var(--dim);margin-top:-4px}
+.prov-status .p-ok{color:var(--up)}
+.prov-status .p-err{color:var(--down);cursor:help}
+.prov-status .p-unk{color:var(--dim)}
 .switchrow{display:flex;justify-content:space-between;align-items:center;margin-top:4px}
 .toggle{width:42px;height:22px;border-radius:11px;border:1px solid var(--line);background:var(--panel);position:relative;cursor:pointer}
 .toggle::after{content:'';position:absolute;top:2px;left:2px;width:16px;height:16px;border-radius:50%;background:var(--knob);transition:.15s}

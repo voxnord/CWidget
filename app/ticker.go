@@ -34,6 +34,7 @@ func (a *App) stopTicker() {
         close(a.stopCh)
         a.stopCh = nil
     }
+    a.cancelRetry() // смена интервала/выход: запланированный ретрай неактуален
 }
 
 func (a *App) intervalMin() int {

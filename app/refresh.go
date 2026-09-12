@@ -10,16 +10,23 @@ import (
 
 /* -------------------------- обновление курсов --------------------------- */
 
+const (
+    retryBaseDelay = 30 * time.Second  // первый ретрай после полного отказа
+    retryMaxDelay  = 10 * time.Minute  // потолок backoff
+)
+
 // ManualRefresh — принудительное обновление по кнопке (трей или окно).
 func (a *App) ManualRefresh() {
     go a.BackgroundRefresh(true)
 }
 
 // BackgroundRefresh: manual=true → после завершения включается минутный кулдаун
-// (трей + кнопка в окне). Автообновление по таймеру кулдаун не включает.
+// (трей + кнопка в окне). Автообновление (таймер, ретрай) кулдаун не включает.
+// После полного отказа (не ответил никто) планируется backoff-ретрай,
+// после успеха — счётчик отказов и запланированный ретрай сбрасываются.
 func (a *App) BackgroundRefresh(manual bool) {
     if !a.busy.CompareAndSwap(false, true) {
-        return // защита от спама кнопкой
+        return // защита от спама кнопкой; параллельная попытка и так идёт
     }
     defer a.busy.Store(false)
 
@@ -34,10 +41,45 @@ func (a *App) BackgroundRefresh(manual bool) {
     }
     a.emitBusy(false)
 
-    if manual {
-        a.startCooldown(time.Minute)
+    if err != nil {
+        a.scheduleRetry() // сеть/API легли — вернёмся раньше планового тика
+        return
     }
+    a.failures.Store(0)
+    a.cancelRetry()
 }
+
+// scheduleRetry — backoff: 30 c, 1 мин, 2 мин, 4 мин, 8 мин, далее кап 10 мин.
+// Активен максимум один ретрай; повторный вызов перезапускает отсчёт.
+func (a *App) scheduleRetry() {
+    n := a.failures.Add(1)
+    d := retryBaseDelay
+    for i := int64(1); i < n && d < retryMaxDelay; i++ {
+        d *= 2
+    }
+    if d > retryMaxDelay {
+        d = retryMaxDelay
+    }
+    a.retryMu.Lock()
+    if a.retryTimer != nil {
+        a.retryTimer.Stop()
+    }
+    a.retryTimer = time.AfterFunc(d, a.BackgroundRefreshFalse)
+    a.retryMu.Unlock()
+}
+
+// cancelRetry отменяет запланированный ретрай (успех, смена интервала, выход).
+func (a *App) cancelRetry() {
+    a.retryMu.Lock()
+    if a.retryTimer != nil {
+        a.retryTimer.Stop()
+        a.retryTimer = nil
+    }
+    a.retryMu.Unlock()
+}
+
+// BackgroundRefreshFalse — адаптер для time.AfterFunc (без кулдауна).
+func (a *App) BackgroundRefreshFalse() { a.BackgroundRefresh(false) }
 
 func (a *App) emitBusy(b bool) {
     if a.ctx != nil {
@@ -56,21 +98,44 @@ func (a *App) startCooldown(d time.Duration) {
     }
 }
 
-// publish рассылает результат обновления: событие фронтенду + метка времени в трее.
+// isFallback — данные пришли от резерва, а не от выбранного провайдера.
+// Пустой SourceKey (дисковый кэш от версии без ключей) деградацией НЕ считается:
+// после первого успешного обновления ключ проставится менеджером.
+func isFallback(tbl *rates.Table, preferred string) bool {
+    return tbl != nil && tbl.SourceKey != "" && preferred != "" && tbl.SourceKey != preferred
+}
+
+// publish рассылает результат обновления: событие фронтенду + синхронизация трея
+// (метка времени, деградация, «нет связи»).
 func (a *App) publish(tbl *rates.Table, err error) {
     if a.ctx == nil {
         return
     }
     if err != nil {
+        a.stale.Store(true)
         runtime.EventsEmit(a.ctx, "rates:error", err.Error())
         if a.trayB != nil {
             a.trayB.NotifyFailure(err.Error())
+            a.trayB.SetStale(true) // тултип иконки: «нет связи»
         }
         return
     }
-    payload := ratesUpdate{Table: tbl, Names: a.ratesM.Names()}
+    a.stale.Store(false)
+    preferred := a.ratesM.Preferred()
+    payload := ratesUpdate{
+        Table:    tbl,
+        Names:    a.ratesM.Names(),
+        Provider: preferred,
+        Fallback: isFallback(tbl, preferred),
+    }
     runtime.EventsEmit(a.ctx, "rates:update", payload)
     if a.trayB != nil {
         a.trayB.SetUpdatedLabel(tbl.FetchedAt)
+        a.trayB.SetStale(false)
+        if payload.Fallback {
+            a.trayB.SetDegraded(true, preferred, tbl.SourceKey)
+        } else {
+            a.trayB.SetDegraded(false, "", "")
+        }
     }
 }

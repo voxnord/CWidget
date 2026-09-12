@@ -4,10 +4,14 @@ const $ = id => document.getElementById(id);
 
 const S = {
   left: "RUB", right: "KZT",
-  amountSide: "left", // какое поле сейчас источник истины: "left" | "right"
+  amountSide: "left",   // какое поле сейчас источник истины: "left" | "right"
   table: null, names: {},
-  dict: {},  // словарь текущего языка (приходит с бэкенда)
-  err: false, // состояние «нет связи» для бейджа
+  dict: {},             // словарь текущего языка (приходит с бэкенда)
+  err: false,           // состояние «нет связи» для бейджа
+  provider: "",         // ключ ВЫБРАННОГО провайдера (из payload)
+  fallback: false,      // данные от резерва (выбранный недоступен)
+  wasFallback: null,    // предыдущее значение fallback: детект ПЕРЕХОДА для тоста
+  pairOverride: null,   // {left,right} — оригинальная пара, временно подменённая
 };
 
 /* Снапшот СОХРАНЁННЫХ настроек. null, пока настройки не открывались. */
@@ -54,6 +58,24 @@ function providerName(tbl) {
   if (tbl?.source_key) return providerLabel({ key: tbl.source_key, name: tbl.source });
   return tbl?.source ?? "—";
 }
+function preferredName() {
+  if (!S.provider) return "—";
+  const k = `provider.${S.provider}`;
+  const tr = t(k);
+  return tr !== k ? tr : S.provider;
+}
+/* Индикатор деградации: ⚠ у бейджа + динамический тултип с объяснением. */
+function updateFallbackUI() {
+  const warn = $("src-warn");
+  warn.hidden = !S.fallback;
+  if (!S.fallback) { warn.title = ""; return; }
+  let tip = t("warn.fallback", preferredName(), providerName(S.table));
+  if (S.pairOverride) {
+    tip += "\n" + t("warn.pair",
+      S.pairOverride.left, S.pairOverride.right, S.left, S.right);
+  }
+  warn.title = tip;
+}
 /* Применить словарь ко всем помеченным элементам + перерисовать динамику. */
 function applyDict(dict) {
   if (!dict) return;
@@ -74,6 +96,7 @@ function applyDict(dict) {
   } else {
     applyUpdate({}); // перерисует бейдж (обн./кот.), строки курса и т.д.
   }
+  updateFallbackUI(); // тултип ⚠ на новом языке
 }
 
 function applyTheme(th) {
@@ -102,13 +125,10 @@ function fmtQuoteDate(iso) {
 }
 
 /* ------------------- ввод сумм с группировкой тысяч ---------------------- */
-/* Поле форматируется прямо во время набора: "24000,5" → "24 000,5".
- * Курсор привязывается к количеству цифр слева от него, поэтому печать
- * в середине числа не «прыгает» в конец. */
 
 function cleanAmountString(s) {
-  s = s.replace(/[^\d.,]/g, "").replace(/\./g, ","); // только цифры и разделители
-  const c = s.indexOf(",");                          // запятая может быть только одна
+  s = s.replace(/[^\d.,]/g, "").replace(/\./g, ",");
+  const c = s.indexOf(",");
   if (c !== -1) s = s.slice(0, c + 1) + s.slice(c + 1).replace(/,/g, "");
   return s;
 }
@@ -116,12 +136,10 @@ function cleanAmountString(s) {
 function groupThousands(s) {
   const c = s.indexOf(",");
   const intPart = c === -1 ? s : s.slice(0, c);
-  const frac = c === -1 ? "" : s.slice(c); // дробная часть — как набрал пользователь
+  const frac = c === -1 ? "" : s.slice(c);
   return intPart.replace(/\B(?=(\d{3})+(?!\d))/g, " ") + frac;
 }
 
-/* formatAmountInput(el, caretPos): caretPos — позиция курсора в el.value
- * ДО перезаписи (на input-событии это текущий selectionStart). */
 function formatAmountInput(el, caretPos) {
   if (caretPos == null) caretPos = el.value.length;
   const raw = el.value;
@@ -152,33 +170,25 @@ function formatAmountInput(el, caretPos) {
   el.setSelectionRange(newCaret, newCaret);
 }
 
-/* Умное удаление в полях сумм:
- * — Backspace, когда курсор сразу ПОСЛЕ пробела-разделителя: удаляет ЦИФРУ
- *   перед пробелом (иначе пробел «воскресает» при перегруппировке).
- * — Delete, когда курсор сразу ПЕРЕД пробелом: удаляет ЦИФРУ после пробела
- *   (зеркальный случай — нативно удалился бы только пробел).
- * Выделение и все остальные позиции обрабатываются браузером нативно,
- * после чего input-событие само переформатирует строку. */
+/* Умное удаление: Backspace после пробела / Delete перед пробелом удаляют
+ * ЦИФРУ, а не сам разделитель (иначе он «воскресает» при перегруппировке). */
 function amountKeydown(e) {
   if (e.key !== "Backspace" && e.key !== "Delete") return;
   const el = e.target;
   const s = el.selectionStart, en = el.selectionEnd;
-  if (s === null || s !== en) return; // есть выделение — нативное поведение ок
+  if (s === null || s !== en) return; // выделение — нативное поведение ок
 
   if (e.key === "Backspace") {
     if (s < 2 || el.value[s - 1] !== " ") return;
     e.preventDefault();
-    // убрать цифру перед пробелом и сам пробел
     el.value = el.value.slice(0, s - 2) + el.value.slice(s - 1);
-    formatAmountInput(el, s - 1); // курсор считаем в уже новой строке
+    formatAmountInput(el, s - 1);
     recalc();
     return;
   }
 
-  // Delete: курсор перед пробелом → удалить цифру после пробела
   if (el.value[s] !== " " || s + 1 >= el.value.length) return;
   e.preventDefault();
-  // убрать сам пробел и цифру после него
   el.value = el.value.slice(0, s) + el.value.slice(s + 2);
   formatAmountInput(el, s);
   recalc();
@@ -219,8 +229,6 @@ function codesFallback(pref, names, taken) {
 }
 
 /* ------------------------------- отрисовка ------------------------------- */
-/* recalc: пересчитывается ТОЛЬКО соседнее поле — то, в котором пользователь
- * не печатает (S.amountSide). Источник истины читается из самого поля. */
 function recalc() {
   const leftEl = $("in-amount");
   const rightEl = $("out-result");
@@ -242,8 +250,7 @@ function recalc() {
   setArr($("arr-r"), trendDir(calcRL));
 }
 
-/* Нижняя кнопка ⇄: развернуть пару валют; число пользователя остаётся
- * в своём поле (и в роли источника), соседнее пересчитывается. */
+/* Нижняя кнопка ⇄: развернуть пару валют; число остаётся в своём поле. */
 function doSwap() {
   [S.left, S.right] = [S.right, S.left];
   $("sel-left").value = S.left;
@@ -251,8 +258,7 @@ function doSwap() {
   recalc();
 }
 
-/* Верхняя кнопка ⇄: развернуть операцию — значения обмениваются между полями
- * вместе с валютами: 100 RUB → 525,3784 KZT  ⇒  525,3784 KZT → 100 RUB. */
+/* Верхняя кнопка ⇄: развернуть операцию — значения обмениваются полями. */
 function doSwapAll() {
   const v = parseAmt($("out-result").value);
   [S.left, S.right] = [S.right, S.left];
@@ -263,7 +269,7 @@ function doSwapAll() {
     S.amountSide = "left";
     const el = $("in-amount");
     el.value = clean;
-    formatAmountInput(el); // сразу с группировкой тысяч
+    formatAmountInput(el);
   }
   recalc();
 }
@@ -286,6 +292,19 @@ function applyUpdate(p) {
   if (p?.table) S.table = p.table;
   if (p?.names) S.names = p.names;
   if (p?.table) S.err = false;
+  if (p?.provider !== undefined) S.provider = p.provider;
+  const prevFallback = S.wasFallback;
+  S.fallback = !!(p?.fallback);
+  S.wasFallback = S.fallback;
+  /* Тост — только на ПЕРЕХОД состояния (не на каждое обновление, не при старте,
+   * не на перерисовку applyUpdate({}) при смене языка): */
+  if (p?.table && prevFallback !== undefined && prevFallback !== S.fallback) {
+    if (S.fallback) {
+      showToast(t("toast.fallback.on", preferredName(), providerName(S.table)));
+    } else {
+      showToast(t("toast.fallback.off", preferredName()));
+    }
+  }
 
   const badge = $("upd-badge");
   if (S.table?.fetched_at) {
@@ -297,11 +316,20 @@ function applyUpdate(p) {
   }
   $("src-badge").textContent = providerName(S.table);
 
-  if (Object.keys(S.names ?? {}).length && !pair(S.left, S.right)) {
+  /* Пара недоступна у источника → временная подмена (запоминаем оригинал);
+   * оригинал снова доступен → автоматический возврат. */
+  if (!pair(S.left, S.right) && Object.keys(S.names ?? {}).length) {
+    if (!S.pairOverride) S.pairOverride = { left: S.left, right: S.right };
     const nl = codesFallback(S.left, S.names);
     const nr = codesFallback(S.right, S.names, nl);
     if (nl && nr && nl !== nr) { S.left = nl; S.right = nr; }
+  } else if (S.pairOverride && pair(S.pairOverride.left, S.pairOverride.right)) {
+    S.left = S.pairOverride.left;
+    S.right = S.pairOverride.right;
+    S.pairOverride = null;
   }
+  updateFallbackUI(); // после пары-логики: тултип может включать подмену
+
   fillSelect($("sel-left"), S.left);
   fillSelect($("sel-right"), S.right);
   recalc();
@@ -379,6 +407,42 @@ function syncSettingsCurrencies() {
   updateDirtyUI();
 }
 
+/* Строка статусов провайдеров в настройках: доступен / недоступен (время)
+ * / ожидает ответа. Полный текст последней ошибки — в тултипе. */
+function renderProviderStatuses(list) {
+  const el = $("provider-status");
+  if (!el) return;
+  el.innerHTML = "";
+  for (const p of list ?? []) {
+    const s = document.createElement("span");
+    const label = providerLabel({ key: p.key, name: p.name });
+    if (!p.tried) {
+      s.className = "p-unk";
+      s.textContent = `${label}: ${t("status.never")}`;
+    } else if (p.ok) {
+      s.className = "p-ok";
+      const at = p.last_ok_at ? fmtTime(new Date(p.last_ok_at)) : "";
+      s.textContent = `${label}: ${t("status.ok")}${at ? " · " + at : ""}`;
+      s.title = at ? t("status.tip.ok", at) : "";
+    } else {
+      s.className = "p-err";
+      const at = p.last_err_at ? fmtTime(new Date(p.last_err_at)) : "";
+      s.textContent = `${label}: ${t("status.fail", at)}`;
+      s.title = p.last_err ?? ""; // полная ошибка — в тултипе
+    }
+    el.appendChild(s);
+  }
+}
+
+/* Обновить только строку статусов (настройки открыты, пришло событие). */
+async function refreshProviderStatuses() {
+  if ($("view-settings").hidden) return;
+  try {
+    const st = await window.go.app.App.GetInitState();
+    renderProviderStatuses(st.provider_statuses);
+  } catch (e) { console.error(e); }
+}
+
 /* ------------- настройки: снапшот, «грязность», подтверждение ------------- */
 
 function snapshotFromState(st) {
@@ -392,7 +456,6 @@ function snapshotFromState(st) {
   };
 }
 
-/* Тумблер автозапуска применяется мгновенно и в «грязность» не входит. */
 function computeDirty() {
   if (!saved) return false;
   return (
@@ -421,7 +484,6 @@ function closeConfirm() {
   confirmCtx = null;
 }
 
-/* Применить всё выбранное (кроме автозапуска — он мгновенный). */
 async function applyPending() {
   const base = $("set-left").value;
   const target = $("set-right").value;
@@ -477,6 +539,7 @@ async function populateSettings() {
     provSel.appendChild(o);
   }
   provSel.value = saved.provider;
+  renderProviderStatuses(st.provider_statuses);
 
   $("set-theme").value = saved.theme;
 
@@ -485,7 +548,7 @@ async function populateSettings() {
   for (const l of st.languages ?? []) {
     const o = document.createElement("option");
     o.value = l.code;
-    o.textContent = l.name; // самоназвание — не переводится
+    o.textContent = l.name;
     langSel.appendChild(o);
   }
   langSel.value = saved.lang;
@@ -500,19 +563,28 @@ async function openSettings() {
 }
 
 /* ------------------------------ события UI ------------------------------- */
-/* Поля сумм: живое форматирование с сохранением курсора + умный Backspace. */
 for (const [el, side] of [[$("in-amount"), "left"], [$("out-result"), "right"]]) {
   el.addEventListener("input", () => {
-    formatAmountInput(el, el.selectionStart); // курсор ДО перезаписи значения
+    formatAmountInput(el, el.selectionStart);
     S.amountSide = side;
     recalc();
   });
   el.addEventListener("keydown", amountKeydown);
 }
- $("sel-left").addEventListener("change", e => { S.left = e.target.value; recalc(); });
- $("sel-right").addEventListener("change", e => { S.right = e.target.value; recalc(); });
- $("swap-amt").addEventListener("click", doSwapAll); // верхняя: суммы + валюты
- $("swap-cur").addEventListener("click", doSwap);    // нижняя: только валюты
+ $("sel-left").addEventListener("change", e => {
+  S.left = e.target.value;
+  S.pairOverride = null; // осознанный выбор пользователя — автоматика не возвращает
+  updateFallbackUI();
+  recalc();
+});
+ $("sel-right").addEventListener("change", e => {
+  S.right = e.target.value;
+  S.pairOverride = null;
+  updateFallbackUI();
+  recalc();
+});
+ $("swap-amt").addEventListener("click", doSwapAll);
+ $("swap-cur").addEventListener("click", doSwap);
  $("btn-refresh").addEventListener("click", () => window.go.app.App.ManualRefresh());
  $("btn-settings").addEventListener("click", () => openSettings());
 
@@ -551,7 +623,6 @@ for (const id of ["set-left", "set-right", "set-interval", "set-provider", "set-
   if (ctx === "back") showMode("main");
 });
 
-/* команды режима приходят с бэкенда (трей → ShowMode → событие) */
 window.runtime?.EventsOn?.("ui:mode", m => {
   setMode(m);
   if (m === "settings") {
@@ -567,11 +638,13 @@ window.runtime?.EventsOn?.("ui:mode", m => {
 window.runtime?.EventsOn?.("rates:update", p => {
   applyUpdate(p);
   syncSettingsCurrencies();
+  refreshProviderStatuses();
 });
 window.runtime?.EventsOn?.("rates:error", () => {
   S.err = true;
   $("upd-badge").textContent = t("rates.error");
   $("upd-badge").classList.add("err");
+  refreshProviderStatuses();
 });
 window.runtime?.EventsOn?.("refresh:busy", b => setRefreshBusy(!!b));
 window.runtime?.EventsOn?.("refresh:cooldown", s => startCooldownUI(s | 0));
@@ -582,7 +655,9 @@ window.runtime?.EventsOn?.("autostart:changed", on => {
 });
 window.runtime?.EventsOn?.("defaults:changed", cfg => {
   S.left = cfg.base_currency; S.right = cfg.target_currency;
+  S.pairOverride = null; // пользователь зафиксировал пару сознательно
   fillSelect($("sel-left"), S.left); fillSelect($("sel-right"), S.right);
+  updateFallbackUI();
 });
 
 /* вкладки настроек */
@@ -609,6 +684,11 @@ document.querySelectorAll(".tab").forEach(btn => btn.addEventListener("click", (
     S.names = st.update.names ?? {};
     S.left = st.config.base_currency; S.right = st.config.target_currency;
     applyUpdate(st.update);
+    if (st.stale) { // старт без сети: сразу честный бейдж, ждём ретрай
+      S.err = true;
+      $("upd-badge").textContent = t("rates.error");
+      $("upd-badge").classList.add("err");
+    }
     setRefreshBusy(false);
     startCooldownUI(st.cooldown_sec | 0);
     setMode("main");

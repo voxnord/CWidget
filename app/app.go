@@ -12,7 +12,7 @@ import (
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
-// Version — версия приложения ("1.2.3" или "1.2.3+3f2a1c9").
+// Version — версия приложения ("1.2.3").
 // Прописывается скриптом сборки через ldflags:
 //   -ldflags "-X <module>/app.Version=1.2.3"
 // Значение "dev" означает запуск из исходников (wails dev / go run) без сборки.
@@ -29,25 +29,34 @@ type TrayBridge interface {
     SetBusy(busy bool)
     Cooldown(d time.Duration)
     NotifyFailure(reason string)
-    Retranslate() // перевод пунктов меню на текущий язык i18n
+    SetDegraded(degraded bool, preferredKey, actualKey string) // резерв вместо выбранного
+    SetStale(stale bool)                                       // «нет связи»: не ответил никто
+    Retranslate()                                              // перевод меню и тултипа на текущий язык
 }
 
+// ratesUpdate — payload события rates:update.
+// Provider — ключ ВЫБРАННОГО провайдера; Table.SourceKey — кто РЕАЛЬНО ответил.
+// Fallback=true означает: выбранный недоступен, показаны данные резерва.
 type ratesUpdate struct {
-    Table *rates.Table      `json:"table"`
-    Names map[string]string `json:"names"`
+    Table    *rates.Table      `json:"table"`
+    Names    map[string]string `json:"names"`
+    Provider string            `json:"provider"`
+    Fallback bool              `json:"fallback"`
 }
 
 type InitPayload struct {
-    Version     string               `json:"version"`   // версия сборки (для «О программе»)
-    Config      config.Config        `json:"config"`
-    AutoEnabled bool                 `json:"autostart_enabled"`
-    CooldownSec int                  `json:"cooldown_sec"` // остаток кулдауна обновления
-    Provider    string               `json:"provider"`     // выбранный провайдер
-    Providers   []rates.ProviderInfo `json:"providers"`    // зарегистрированные провайдеры
-    Lang        string               `json:"lang"`         // текущий язык
-    Languages   []i18n.Language      `json:"languages"`    // доступные языки
-    I18n        map[string]string    `json:"i18n"`         // словарь текущего языка для UI
-    Update      ratesUpdate          `json:"update"`
+    Version          string               `json:"version"`   // версия сборки (для «О программе»)
+    Config           config.Config        `json:"config"`
+    AutoEnabled      bool                 `json:"autostart_enabled"`
+    CooldownSec      int                  `json:"cooldown_sec"` // остаток кулдауна обновления
+    Provider         string               `json:"provider"`     // выбранный провайдер
+    Providers        []rates.ProviderInfo `json:"providers"`    // зарегистрированные провайдеры
+    ProviderStatuses []rates.ProviderStatus `json:"provider_statuses"` // диагностика провайдеров
+    Stale            bool                 `json:"stale"`        // «нет связи» (не ответил никто)
+    Lang             string               `json:"lang"`         // текущий язык
+    Languages        []i18n.Language      `json:"languages"`    // доступные языки
+    I18n             map[string]string    `json:"i18n"`         // словарь текущего языка для UI
+    Update           ratesUpdate          `json:"update"`
 }
 
 // App — центральное состояние приложения. Файлы пакета делят методы по
@@ -63,6 +72,11 @@ type App struct {
     exiting       atomic.Bool
     busy          atomic.Bool
     cooldownUntil atomic.Int64 // unix-время окончания кулдауна
+    stale         atomic.Bool  // «нет связи»: последняя попытка обновления не ответила
+    failures      atomic.Int64 // подряд идущих полных отказов (для backoff)
+
+    retryMu    sync.Mutex
+    retryTimer *time.Timer // запланированный backoff-ретрай (максимум один)
 
     stopMu sync.Mutex
     stopCh chan struct{}

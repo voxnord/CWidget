@@ -33,10 +33,13 @@ type Tray struct {
     mLang     *systray.MenuItem
     langItems map[string]*systray.MenuItem
 
-    mu            sync.Mutex
-    lastUpdate    time.Time     // момент последнего успешного обновления
+    mu            sync.RWMutex // RWMutex: applyTooltip читает под RLock, писатели — под Lock
+    lastUpdate    time.Time    // момент последнего успешного обновления
     cooldownUntil time.Time     // до какого времени заблокирована кнопка
     cooldownStop  chan struct{} // отмена текущего отсчёта
+
+    degPref, degAct string // деградация: ключи выбранного и фактического провайдера ("" = нет)
+    stale           bool   // «нет связи»: последняя попытка не ответила никто
 }
 
 func New(iconICO, iconPNG []byte, hooks Hooks) *Tray {
@@ -81,8 +84,9 @@ func (t *Tray) onReady() {
     t.mAuto = systray.AddMenuItemCheckbox(i18n.T("tray.autostart"), i18n.T("tray.autostart.tip"), false)
     t.mSettings = systray.AddMenuItem(i18n.T("tray.settings"), i18n.T("tray.settings.tip"))
 
-    // Подменю языков: пункты строятся из реестра словарей — новый язык
-    // (новый JSON в locales/) появляется здесь автоматически.
+    // Подменю языков: родительский пункт — обычный пункт меню,
+    // подпункты добавляются методом AddSubMenuItem этого пункта.
+    // Новый язык (новый JSON в locales/) появляется здесь автоматически.
     t.mLang = systray.AddMenuItem(i18n.T("tray.language"), i18n.T("tray.language"))
     t.langItems = make(map[string]*systray.MenuItem)
     for _, l := range i18n.Languages() {
@@ -91,8 +95,6 @@ func (t *Tray) onReady() {
         item.Click(func() {
             go func() {
                 if t.hooks.SetLanguage != nil {
-                    // app сохранит выбор, переключит словарь, переведёт трей
-                    // (через Retranslate) и разошлёт событие фронтенду.
                     t.hooks.SetLanguage(code)
                 }
             }()
@@ -159,13 +161,55 @@ func (t *Tray) inCooldown() bool {
     return time.Now().Before(t.cooldownUntil)
 }
 
-// Retranslate — перевод всех пунктов меню на текущий язык i18n.
-// Вызывается приложением после SetLanguage. Идемпотентен.
+// applyTooltip — тултип иконки трея. Приоритет отражает серьёзность:
+// «нет связи» (не ответил никто) > деградация (ответил резерв) > обычный.
+// Имена провайдеров берутся из словаря по ключам — при смене языка
+// Retranslate() пересобирает тултип сам.
+func (t *Tray) applyTooltip() {
+    t.mu.RLock()
+    pref, act, stale, last := t.degPref, t.degAct, t.stale, t.lastUpdate
+    t.mu.RUnlock()
+    switch {
+    case stale:
+        if last.IsZero() {
+            systray.SetTooltip(i18n.T("warn.offline.tip"))
+        } else {
+            systray.SetTooltip(i18n.T("warn.offline.tip.at", last.Local().Format("15:04")))
+        }
+    case pref != "" && act != "" && pref != act:
+        systray.SetTooltip(i18n.T("warn.tray.tip", i18n.T("provider."+pref), i18n.T("provider."+act)))
+    default:
+        systray.SetTooltip(i18n.T("tray.tooltip"))
+    }
+}
+
+// SetDegraded — приложение сообщает о деградации: выбранный провайдер
+// недоступен, данные пришли от резерва (ключи передаются для локализации).
+func (t *Tray) SetDegraded(degraded bool, preferredKey, actualKey string) {
+    t.mu.Lock()
+    if degraded && preferredKey != "" && actualKey != "" && preferredKey != actualKey {
+        t.degPref, t.degAct = preferredKey, actualKey
+    } else {
+        t.degPref, t.degAct = "", ""
+    }
+    t.mu.Unlock()
+    t.applyTooltip()
+}
+
+// SetStale — «нет связи»: последняя попытка обновления не ответила никому.
+func (t *Tray) SetStale(stale bool) {
+    t.mu.Lock()
+    t.stale = stale
+    t.mu.Unlock()
+    t.applyTooltip()
+}
+
+// Retranslate — перевод всех пунктов меню и тултипа на текущий язык i18n.
 func (t *Tray) Retranslate() {
     if t.mOpen == nil {
         return // меню ещё не построено
     }
-    systray.SetTooltip(i18n.T("tray.tooltip"))
+    t.applyTooltip()
     t.mOpen.SetTitle(i18n.T("tray.open"))
     t.mOpen.SetTooltip(i18n.T("tray.open.tip"))
 

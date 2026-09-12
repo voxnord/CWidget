@@ -13,6 +13,7 @@
   <section id="view-main">
     <header class="topbar drag">
       <span id="src-badge" class="src">—</span>
+      <span id="src-warn" class="src-warn" hidden>⚠</span>
       <span id="upd-badge" class="upd" data-i18n-title="upd.title">…</span>
       <div class="tools no-drag">
         <button id="btn-refresh" class="icon-btn" data-i18n-title="tray.refresh">⟳</button>
@@ -73,6 +74,7 @@
 
       <label class="lbl" for="set-provider" data-i18n="settings.provider">Источник курсов</label>
       <select id="set-provider"></select>
+      <div id="provider-status" class="prov-status"></div>
 
       <label class="lbl" for="set-interval" data-i18n="settings.interval">Период обновления курса</label>
       <select id="set-interval">

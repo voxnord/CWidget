@@ -17,6 +17,7 @@ func (a *App) GetInitState() InitPayload {
     cfgCopy := *a.cfg
     a.cfgMu.Unlock()
     tbl, _ := a.ratesM.Current()
+    pref := a.ratesM.Preferred()
 
     cooldownSec := 0
     if rem := time.Until(time.Unix(a.cooldownUntil.Load(), 0)); rem > 0 {
@@ -24,16 +25,23 @@ func (a *App) GetInitState() InitPayload {
     }
 
     return InitPayload{
-        Version:     Version,
-        Config:      cfgCopy,
-        AutoEnabled: autostartEnabled(),
-        CooldownSec: cooldownSec,
-        Provider:    a.ratesM.Preferred(),
-        Providers:   a.ratesM.Providers(),
-        Lang:        i18n.Current(),
-        Languages:   i18n.Languages(),
-        I18n:        i18n.Dict(),
-        Update:      ratesUpdate{Table: tbl, Names: a.ratesM.Names()},
+        Version:          Version,
+        Config:           cfgCopy,
+        AutoEnabled:      autostartEnabled(),
+        CooldownSec:      cooldownSec,
+        Provider:         pref,
+        Providers:        a.ratesM.Providers(),
+        ProviderStatuses: a.ratesM.Statuses(),
+        Stale:            a.stale.Load(),
+        Lang:             i18n.Current(),
+        Languages:        i18n.Languages(),
+        I18n:             i18n.Dict(),
+        Update: ratesUpdate{
+            Table:    tbl,
+            Names:    a.ratesM.Names(),
+            Provider: pref,
+            Fallback: isFallback(tbl, pref),
+        },
     }
 }
 
