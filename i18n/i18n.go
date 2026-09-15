@@ -28,7 +28,7 @@ var localeFS embed.FS
 // en.json is absent.
 var fallbackLang = "en"
 
-const defaultLang = "ru"
+const defaultLang = "en"
 
 // Language describes a language for the UI (the settings list and the tray
 // submenu are built from it).
