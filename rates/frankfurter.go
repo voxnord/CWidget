@@ -11,6 +11,12 @@ import (
 
 const defaultFFBase = "https://api.frankfurter.app"
 
+// Frankfurter is the adapter for the Frankfurter API (ECB reference rates).
+// Anchor currency: EUR. Note: RUB is not published since March 2022 and KZT
+// has never been in the ECB set, so for those codes the manager silently
+// falls through to the next provider. No "yesterday" in the response — it is
+// fetched with a separate request (non-working days are auto-rolled back by
+// the API; if it matches the current date, the history is discarded).
 type Frankfurter struct {
     client *http.Client
     base   string
@@ -46,7 +52,8 @@ func (f *Frankfurter) get(ctx context.Context, url string, dst any) error {
 
 func (f *Frankfurter) Fetch(ctx context.Context) (*Table, error) {
     names := map[string]string{"EUR": "Euro"}
-    // /currencies — некритичный справочник имён
+    // /currencies is a non-critical name dictionary (the fallback fills the
+    // rest from other adapters)
     var cur map[string]string
     if err := f.get(ctx, f.base+"/currencies", &cur); err == nil {
         for k, v := range cur {
@@ -67,7 +74,7 @@ func (f *Frankfurter) Fetch(ctx context.Context) (*Table, error) {
         }
     }
 
-    // «Вчерашний» снимок для стрелок тренда.
+    // "Yesterday" snapshot for the trend arrows.
     yday := time.Now().UTC().AddDate(0, 0, -1).Format("2006-01-02")
     var hist ffDoc
     if err := f.get(ctx, f.base+"/"+yday, &hist); err == nil &&
@@ -86,7 +93,7 @@ func (f *Frankfurter) Fetch(ctx context.Context) (*Table, error) {
     }
 
     return &Table{
-        FetchedAt: time.Now().UTC(),
+        FetchedAt: time.Now().UTC(), // the moment of the successful request
         QuoteDate: latest.Date,
         Source:    f.Name(),
         Anchor:    anchor,

@@ -1,3 +1,4 @@
+// Package tray wraps the system tray icon and its context menu.
 package tray
 
 import (
@@ -9,7 +10,8 @@ import (
 	"github.com/voxnord/cwidget/i18n"
 )
 
-// Hooks — всё, что трей просит сделать у внешнего мира (приложение внедряет реализации).
+// Hooks is everything the tray asks the outside world to do
+// (the app injects implementations).
 type Hooks struct {
     ShowWidget      func()
     OpenSettings    func()
@@ -23,7 +25,7 @@ type Tray struct {
     iconICO []byte // Windows (.ico)
     iconPNG []byte // Linux/macOS
     hooks   Hooks
-    autoOn  bool // локальное состояние галочки (для чередования кликов)
+    autoOn  bool // local checkbox state (for click toggling)
 
     mOpen     *systray.MenuItem
     mRefresh  *systray.MenuItem
@@ -33,20 +35,20 @@ type Tray struct {
     mLang     *systray.MenuItem
     langItems map[string]*systray.MenuItem
 
-    mu            sync.RWMutex // RWMutex: applyTooltip читает под RLock, писатели — под Lock
-    lastUpdate    time.Time    // момент последнего успешного обновления
-    cooldownUntil time.Time     // до какого времени заблокирована кнопка
-    cooldownStop  chan struct{} // отмена текущего отсчёта
+    mu            sync.RWMutex // RWMutex: applyTooltip reads under RLock, writers use Lock
+    lastUpdate    time.Time    // moment of the last successful refresh
+    cooldownUntil time.Time    // until when the refresh item is blocked
+    cooldownStop  chan struct{} // cancels the current countdown
 
-    degPref, degAct string // деградация: ключи выбранного и фактического провайдера ("" = нет)
-    stale           bool   // «нет связи»: последняя попытка не ответила никто
+    degPref, degAct string // degraded: keys of the selected and the actual provider ("" = none)
+    stale           bool   // "offline": nobody answered on the last attempt
 }
 
 func New(iconICO, iconPNG []byte, hooks Hooks) *Tray {
     return &Tray{iconICO: iconICO, iconPNG: iconPNG, hooks: hooks}
 }
 
-// Run блокирует вызывающую горутину до Stop().
+// Run blocks the calling goroutine until Stop().
 func (t *Tray) Run() { systray.Run(t.onReady, nil) }
 
 func (t *Tray) Stop() { systray.Quit() }
@@ -59,19 +61,21 @@ func (t *Tray) onReady() {
     }
     systray.SetTooltip(i18n.T("tray.tooltip"))
 
-    // ЛКМ — открыть окно конвертера, меню НЕ показывать (не вызываем ShowMenu).
-    // Работает на Windows/macOS. На Linux AppIndicator-протокол в большинстве DE
-    // не передаёт приложению тип клика — там меню откроется в любом случае.
+    // Left click — open the converter window, do NOT show the menu
+    // (ShowMenu is not called). Works on Windows/macOS. On Linux the
+    // AppIndicator protocol does not report the click type in most DEs —
+    // the menu will open there regardless; the "Open" menu item keeps the
+    // functionality.
     systray.SetOnClick(func(_ systray.IMenu) {
         if t.hooks.ShowWidget != nil {
             t.hooks.ShowWidget()
         }
     })
-    // ПКМ — контекстное меню.
+    // Right click — context menu.
     systray.SetOnRClick(func(menu systray.IMenu) {
         menu.ShowMenu()
     })
-    // Двойной клик — тоже окно.
+    // Double click — the window as well.
     systray.SetOnDClick(func(_ systray.IMenu) {
         if t.hooks.ShowWidget != nil {
             t.hooks.ShowWidget()
@@ -84,9 +88,9 @@ func (t *Tray) onReady() {
     t.mAuto = systray.AddMenuItemCheckbox(i18n.T("tray.autostart"), i18n.T("tray.autostart.tip"), false)
     t.mSettings = systray.AddMenuItem(i18n.T("tray.settings"), i18n.T("tray.settings.tip"))
 
-    // Подменю языков: родительский пункт — обычный пункт меню,
-    // подпункты добавляются методом AddSubMenuItem этого пункта.
-    // Новый язык (новый JSON в locales/) появляется здесь автоматически.
+    // Language submenu: the parent item is a regular menu item, language
+    // entries are added via the AddSubMenuItem method of that item. A new
+    // language (a new JSON in locales/) appears here automatically.
     t.mLang = systray.AddMenuItem(i18n.T("tray.language"), i18n.T("tray.language"))
     t.langItems = make(map[string]*systray.MenuItem)
     for _, l := range i18n.Languages() {
@@ -129,7 +133,7 @@ func onClick(m *systray.MenuItem, fn func()) {
     })
 }
 
-/* ---------- мост из приложения (реализация app.TrayBridge) ---------- */
+/* ---------- bridge from the app (implements app.TrayBridge) ---------- */
 
 func (t *Tray) langTitle(code string) string {
     name := code
@@ -161,10 +165,10 @@ func (t *Tray) inCooldown() bool {
     return time.Now().Before(t.cooldownUntil)
 }
 
-// applyTooltip — тултип иконки трея. Приоритет отражает серьёзность:
-// «нет связи» (не ответил никто) > деградация (ответил резерв) > обычный.
-// Имена провайдеров берутся из словаря по ключам — при смене языка
-// Retranslate() пересобирает тултип сам.
+// applyTooltip builds the tray icon tooltip. Priority mirrors severity:
+// "offline" (nobody answered) > degraded (the fallback answered) > normal.
+// Provider names come from the dictionary by keys — Retranslate() rebuilds
+// the tooltip on a language switch automatically.
 func (t *Tray) applyTooltip() {
     t.mu.RLock()
     pref, act, stale, last := t.degPref, t.degAct, t.stale, t.lastUpdate
@@ -183,8 +187,8 @@ func (t *Tray) applyTooltip() {
     }
 }
 
-// SetDegraded — приложение сообщает о деградации: выбранный провайдер
-// недоступен, данные пришли от резерва (ключи передаются для локализации).
+// SetDegraded is told by the app: the selected provider is unavailable and
+// data came from the fallback (keys are passed for localization).
 func (t *Tray) SetDegraded(degraded bool, preferredKey, actualKey string) {
     t.mu.Lock()
     if degraded && preferredKey != "" && actualKey != "" && preferredKey != actualKey {
@@ -196,7 +200,7 @@ func (t *Tray) SetDegraded(degraded bool, preferredKey, actualKey string) {
     t.applyTooltip()
 }
 
-// SetStale — «нет связи»: последняя попытка обновления не ответила никому.
+// SetStale marks "offline": the last refresh attempt was answered by nobody.
 func (t *Tray) SetStale(stale bool) {
     t.mu.Lock()
     t.stale = stale
@@ -204,10 +208,11 @@ func (t *Tray) SetStale(stale bool) {
     t.applyTooltip()
 }
 
-// Retranslate — перевод всех пунктов меню и тултипа на текущий язык i18n.
+// Retranslate translates all menu items and the tooltip to the current
+// i18n language. Idempotent.
 func (t *Tray) Retranslate() {
     if t.mOpen == nil {
-        return // меню ещё не построено
+        return // the menu is not built yet
     }
     t.applyTooltip()
     t.mOpen.SetTitle(i18n.T("tray.open"))
@@ -215,7 +220,8 @@ func (t *Tray) Retranslate() {
 
     switch {
     case t.inCooldown():
-        // заголовок с отсчётом перерисует тикер кулдауна — он берёт i18n.T в момент тика
+        // the countdown title is redrawn by the cooldown ticker — it calls
+        // i18n.T at each tick
     case t.mRefresh.Disabled():
         t.mRefresh.SetTitle(i18n.T("tray.refresh.busy"))
     default:
@@ -238,7 +244,7 @@ func (t *Tray) Retranslate() {
     }
 }
 
-// SetUpdatedLabel фиксирует время последнего успешного обновления.
+// SetUpdatedLabel pins the time of the last successful refresh.
 func (t *Tray) SetUpdatedLabel(at time.Time) {
     t.mu.Lock()
     t.lastUpdate = at
@@ -258,14 +264,14 @@ func (t *Tray) SetBusy(busy bool) {
         return
     }
     if t.inCooldown() {
-        return // кулдаун сам вернёт кнопку по истечении
+        return // the cooldown will re-enable the item on its own
     }
     t.mRefresh.SetTitle(t.refreshTitle())
     t.mRefresh.Enable()
 }
 
-// Cooldown блокирует пункт обновления на время d (серый, некликабельный),
-// показывая обратный отсчёт. Повторный вызов перезапускает отсчёт.
+// Cooldown blocks the refresh item for d (grey, unclickable) showing a live
+// countdown. A repeated call restarts the countdown.
 func (t *Tray) Cooldown(d time.Duration) {
     t.mu.Lock()
     if t.cooldownStop != nil {

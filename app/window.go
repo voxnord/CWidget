@@ -5,10 +5,10 @@ import (
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
-/* ----------------------------- показ окна ------------------------------- */
+/* ----------------------------- window presentation ----------------------- */
 
-// ShowMode — единая точка показа: размер под режим, позиция у трея,
-// скругление под фактический размер, фокус.
+// ShowMode is the single presentation entry point: size per mode, position
+// near the tray, corner rounding for the actual size, focus.
 func (a *App) ShowMode(mode string) {
     if a.ctx == nil {
         return
@@ -19,7 +19,7 @@ func (a *App) ShowMode(mode string) {
     }
     runtime.WindowSetSize(a.ctx, w, h)
     popup.MoveNearTray(WindowTitle)
-    popup.RoundCorners(WindowTitle) // регион зависит от размера — после ресайза
+    popup.RoundCorners(WindowTitle) // the region depends on the size — after the resize
     runtime.WindowUnminimise(a.ctx)
     runtime.WindowShow(a.ctx)
     popup.FocusWindow(WindowTitle)

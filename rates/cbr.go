@@ -11,6 +11,9 @@ import (
 
 const defaultCBRURL = "https://www.cbr-xml-daily.ru/daily_json.js"
 
+// CBR is the adapter for the Central Bank of Russia daily rates feed
+// (cbr-xml-daily.ru). Anchor currency: RUB. Provides Previous for every
+// currency out of the box, so trend arrows work without extra logic.
 type CBR struct {
     client *http.Client
     url    string
@@ -72,8 +75,9 @@ func (c *CBR) Fetch(ctx context.Context) (*Table, error) {
         quoteDate = doc.Date.Format("2006-01-02")
     }
     return &Table{
-        // FetchedAt = момент успешного запроса (для метки «обн. 14:30»),
-        // QuoteDate = дата официальных котировок ЦБ (меняется раз в день).
+        // IMPORTANT: the time of OUR successful request (for the "upd. 14:30"
+        // label), not the CBR quote Date (quotes change once a day — the label
+        // would stay the same all day otherwise).
         FetchedAt: time.Now().UTC(),
         QuoteDate: quoteDate,
         Source:    c.Name(),

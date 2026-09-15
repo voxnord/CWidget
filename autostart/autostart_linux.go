@@ -11,20 +11,21 @@ import (
 const desktopName = "cwidget.desktop"
 
 func desktopPath() (string, error) {
-    cfg, err := os.UserConfigDir() // $XDG_CONFIG_HOME либо ~/.config
+    cfg, err := os.UserConfigDir() // $XDG_CONFIG_HOME or ~/.config
     if err != nil {
         return "", err
     }
     return filepath.Join(cfg, "autostart", desktopName), nil
 }
 
-// escapeExec квотирует путь для строки Exec= файла .desktop.
+// escapeExec quotes the path for the Exec= line of a .desktop file.
 func escapeExec(p string) string {
     p = strings.ReplaceAll(p, `\`, `\\`)
     p = strings.ReplaceAll(p, `"`, `\"`)
     return `"` + p + `"`
 }
 
+// Enable creates the XDG autostart .desktop entry.
 func Enable() error {
     p, err := desktopPath()
     if err != nil {
@@ -41,7 +42,7 @@ func Enable() error {
         "Type=Application\n" +
         "Version=1.0\n" +
         "Name=CWidget\n" +
-        "Comment=Tray currency converter\n" +
+        "Comment=Currency converter tray widget\n" +
         "Exec=" + escapeExec(exe) + "\n" +
         "Terminal=false\n" +
         "NoDisplay=false\n" +
@@ -49,6 +50,7 @@ func Enable() error {
     return os.WriteFile(p, []byte(content), 0o644)
 }
 
+// Disable removes the .desktop entry. A missing file counts as success.
 func Disable() error {
     p, err := desktopPath()
     if err != nil {
@@ -60,6 +62,7 @@ func Disable() error {
     return nil
 }
 
+// Enabled reports whether the .desktop entry exists.
 func Enabled() bool {
     p, err := desktopPath()
     if err != nil {

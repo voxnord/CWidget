@@ -2,8 +2,8 @@ package app
 
 import "github.com/voxnord/cwidget/autostart"
 
-// Тонкие обёртки: app.go не знает о платформенных реализациях,
-// а build tags сами подставляют нужный файл при сборке под ОС.
+// Thin wrappers: app.go does not need to know about platform-specific
+// implementations — build tags pick the right file at compile time.
 
 func autostartEnabled() bool  { return autostart.Enabled() }
 func autostartEnable() error  { return autostart.Enable() }

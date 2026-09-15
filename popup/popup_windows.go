@@ -1,5 +1,8 @@
 //go:build windows
 
+// Package popup contains platform-specific window tweaks: hiding the window
+// from the taskbar, locking its size, rounding corners, tray-side positioning
+// and focus activation. All operations locate the window by its unique title.
 package popup
 
 import (
@@ -27,14 +30,14 @@ var (
 )
 
 const (
-    // GWL_EXSTYLE = -20, GWL_STYLE = -16 — в беззнаковом 32-битном виде
-    // (отрицательные константы в uintptr писать нельзя).
+    // GWL_EXSTYLE = -20, GWL_STYLE = -16 — in unsigned 32-bit form
+    // (negative constants cannot be written into a uintptr).
     gwlExStyle     uintptr = 0xFFFFFFEC
     gwlStyle       uintptr = 0xFFFFFFF0
-    wsExToolWindow         = 0x00000080 // убирает кнопку из панели задач и Alt+Tab
-    wsExAppWindow          = 0x00040000 // принудительная кнопка — снимаем её
-    wsThickFrame           = 0x00040000 // WS_THICKFRAME: невидимая рамка ресайза
-    wsMaximizeBox          = 0x00010000 // WS_MAXIMIZEBOX: разрешает развернуть (Win+Up)
+    wsExToolWindow         = 0x00000080 // removes the taskbar and Alt+Tab button
+    wsExAppWindow          = 0x00040000 // forced taskbar button — we clear it
+    wsThickFrame           = 0x00040000 // WS_THICKFRAME: invisible resize frame
+    wsMaximizeBox          = 0x00010000 // WS_MAXIMIZEBOX: allows maximize (Win+Up)
 
     swpNoSize       = 0x0001
     swpNoMove       = 0x0002
@@ -44,22 +47,23 @@ const (
     spiGetWorkArea  = 0x0030
     swRestore       = 9
 
-    // Windows 11: скругление средствами DWM (с антиалиасингом).
+    // Windows 11: rounding via DWM (anti-aliased).
     dwmwaCornerPref = 33
     dwmwcpRound     = 2
 
-    trayMargin = 12 // отступ от краёв рабочей области, px
+    trayMargin = 12 // margin from the work-area edges, px
 
-    // Радиус скругления пропорционален ширине окна (пересчёт DPI автоматический,
-    // т.к. считаем от физических пикселей GetWindowRect).
+    // The rounding radius scales with the window width (DPI is handled
+    // automatically because we compute from the physical pixels of
+    // GetWindowRect).
     //
-    // ВАЖНО (антиступенька на Win10): регион чуть МЕНЬШЕ CSS-радиуса (13 против
-    // 14 в style.css). Жёсткий край разреза — а GDI-регион всегда 1-битный,
-    // без сглаживания — проходит ровно по тёмной hairline-линии, нарисованной
-    // в CSS (body box-shadow inset). Ступенчатые пиксели попадают на тёмную
-    // линию и становятся практически незаметны. Хотите вернуть прежний вид —
-    // поставьте 14.0 и уберите box-shadow у body.
-    cornerNum = 15.0
+    // IMPORTANT (anti-jaggies on Win10): the region is slightly SMALLER than
+    // the CSS radius (13 vs 14 in style.css). The hard clipping edge — a GDI
+    // region is always 1-bit, no anti-aliasing — then falls exactly on the
+    // dark hairline drawn in CSS (body box-shadow inset), and the staircase
+    // pixels become practically invisible. To restore the previous look, set
+    // 14.0 and remove the body box-shadow.
+    cornerNum = 13.0
     cornerDen = 380.0
 )
 
@@ -86,11 +90,11 @@ func windowSize(hwnd uintptr) (int32, int32) {
     return wr.Right - wr.Left, wr.Bottom - wr.Top
 }
 
-/* ------------------------------ таскбар --------------------------------- */
+/* -------------------------------- taskbar -------------------------------- */
 
-// RemoveFromTaskbar находит окно Wails по заголовку и превращает его в tool-window.
-// Окно создаётся скрытым (StartHidden: true), поэтому стиль применяется
-// ДО первого показа — кнопка в панели задач никогда не появится.
+// RemoveFromTaskbar finds the Wails window by title and turns it into a
+// tool-window. The window is created hidden (StartHidden: true), so the
+// style is applied BEFORE the first show — a taskbar button never appears.
 func RemoveFromTaskbar(title string) {
     go func() {
         for i := 0; i < 100; i++ {
@@ -105,13 +109,13 @@ func RemoveFromTaskbar(title string) {
     }()
 }
 
-/* --------------------------- фиксированный размер ------------------------ */
+/* ----------------------------- fixed size -------------------------------- */
 
-// LockResize делает окно строго фиксированного размера.
-// WS_THICKFRAME даёт невидимую рамку ресайза: DefWindowProc возвращает зоны
-// захвата у краёв даже frameless-окна. Заодно снимаем WS_MAXIMIZEBOX,
-// чтобы окно нельзя было развернуть (Win+Up). Программный WindowSetSize
-// (виджет ↔ настройки) идёт через SetWindowPos и от этих стилей не зависит.
+// LockResize makes the window strictly fixed-size. WS_THICKFRAME provides an
+// invisible resize frame: DefWindowProc returns hit-test zones near the edges
+// even for frameless windows. WS_MAXIMIZEBOX is also cleared so the window
+// cannot be maximized (Win+Up). The programmatic WindowSetSize (widget <->
+// settings) goes through SetWindowPos and does not depend on these styles.
 func LockResize(title string) {
     hwnd := findHwnd(title)
     if hwnd == 0 {
@@ -127,10 +131,10 @@ func LockResize(title string) {
         swpFrameChanged|swpNoMove|swpNoSize|swpNoZOrder|swpNoActivate)
 }
 
-/* ------------------------------ позиция --------------------------------- */
+/* ------------------------------- position -------------------------------- */
 
-// MoveNearTray ставит окно в правый нижний угол рабочей области —
-// стандартное положение попапов трея (как системные уведомления Windows).
+// MoveNearTray places the window in the bottom-right corner of the work area
+// — the standard position for tray popups (like Windows notifications).
 func MoveNearTray(title string) {
     hwnd := findHwnd(title)
     if hwnd == 0 {
@@ -153,15 +157,15 @@ func MoveNearTray(title string) {
         swpNoSize|swpNoZOrder|swpNoActivate)
 }
 
-/* ------------------------------ скругления ------------------------------- */
+/* ------------------------------- rounding -------------------------------- */
 
-// RoundCorners скругляет углы окна.
-// Windows 11 — нативные скругления DWM (гладкие, переживают ресайз).
-// Windows 10 — окно клипается регионом SetWindowRgn; край без сглаживания
-// сглажен быть не может физически (GDI-регионы 1-битные), поэтому радиус
-// региона выбран чуть меньше CSS — разрез проходит по тёмной hairline из CSS.
-// Регион считается от фактического RECT: после смены режима (размера окна)
-// пересчитывается; вызов идемпотентен.
+// RoundCorners rounds the window corners.
+// Windows 11 — native DWM rounding (smooth, survives resizes).
+// Windows 10 — no system support (DWM rejects the attribute), so the window
+// is clipped with a SetWindowRgn region; the edge has no anti-aliasing —
+// a Win10 limitation — hence the slightly smaller radius (see cornerNum).
+// The region is computed from the actual RECT: it is recomputed after a mode
+// (window size) change; the call is idempotent.
 func RoundCorners(title string) {
     hwnd := findHwnd(title)
     if hwnd == 0 {
@@ -171,8 +175,9 @@ func RoundCorners(title string) {
         return
     }
     applyRegion(hwnd)
-    // WindowSetSize в Wails асинхронный: регион мог быть посчитан по старому
-    // размеру. Пересчитываем ещё пару раз по актуальному RECT.
+    // WindowSetSize in Wails is asynchronous: the region may have been
+    // computed from the old size. Recompute a couple more times from the
+    // up-to-date RECT.
     go func() {
         for _, d := range []time.Duration{150 * time.Millisecond, 400 * time.Millisecond} {
             time.Sleep(d)
@@ -184,7 +189,7 @@ func RoundCorners(title string) {
 func tryDWMCorners(hwnd uintptr) bool {
     pref := uint32(dwmwcpRound)
     hr, _, _ := procDwmSetWindowAttr.Call(hwnd, dwmwaCornerPref, uintptr(unsafe.Pointer(&pref)), 4)
-    return hr == 0 // S_OK только на Windows 11
+    return hr == 0 // S_OK only on Windows 11
 }
 
 func applyRegion(hwnd uintptr) {
@@ -200,18 +205,21 @@ func applyRegion(hwnd uintptr) {
     if rgn == 0 {
         return
     }
-    // Система забирает регион во владение — удалять его нельзя.
+    // The system takes ownership of the region — do not delete it.
     procSetWindowRgn.Call(hwnd, rgn, 1)
 }
 
-/* ------------------------------- фокус ----------------------------------- */
+/* -------------------------------- focus ---------------------------------- */
 
-// FocusWindow активирует окно (фокус + передний план).
+// FocusWindow activates the window (focus + foreground). Wails v2 has no
+// equivalent (WindowFocus appeared only in v3), hence Win32. Best-effort:
+// Windows restricts foreground transfers to "foreign" processes, but the
+// process owning the tray icon the user just clicked is allowed to do this.
 func FocusWindow(title string) {
     hwnd := findHwnd(title)
     if hwnd == 0 {
         return
     }
-    procShowWindow.Call(hwnd, swRestore) // если окно минимизировано — развернуть
+    procShowWindow.Call(hwnd, swRestore) // restore if minimized
     procSetForegroundWindow.Call(hwnd)
 }

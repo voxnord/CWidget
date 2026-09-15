@@ -2,7 +2,7 @@ package app
 
 import "time"
 
-/* ------------------------------ таймер ---------------------------------- */
+/* -------------------------------- ticker --------------------------------- */
 
 func (a *App) startTicker() {
     a.stopMu.Lock()
@@ -21,7 +21,7 @@ func (a *App) startTicker() {
                 t.Stop()
                 return
             case <-t.C:
-                a.BackgroundRefresh(false) // автообновление без кулдауна
+                a.BackgroundRefresh(false) // automatic refresh, no cooldown
             }
         }
     }()
@@ -34,7 +34,7 @@ func (a *App) stopTicker() {
         close(a.stopCh)
         a.stopCh = nil
     }
-    a.cancelRetry() // смена интервала/выход: запланированный ретрай неактуален
+    a.cancelRetry() // interval change/quit: a scheduled retry is no longer valid
 }
 
 func (a *App) intervalMin() int {

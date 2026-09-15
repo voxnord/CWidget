@@ -1,3 +1,7 @@
+// Package app wires the Wails lifecycle, the tray, the rates manager and the
+// frontend bindings together. Methods are split across files by responsibility:
+// window.go — window presentation, refresh.go — rates updates and cooldowns,
+// settings.go — the frontend-facing API, ticker.go — the background timer.
 package app
 
 import (
@@ -12,31 +16,35 @@ import (
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
-// Version — версия приложения ("1.2.3").
-// Прописывается скриптом сборки через ldflags:
-//   -ldflags "-X <module>/app.Version=1.2.3"
-// Значение "dev" означает запуск из исходников (wails dev / go run) без сборки.
+// Version is the application version ("1.2.3"). It is injected by the build
+// script via ldflags:
+//
+//	-ldflags "-X <module>/app.Version=1.2.3"
+//
+// The value "dev" means the app was started from sources (wails dev / go run).
 var Version = "dev"
 
-// WindowTitle — уникальный заголовок окна. Задаётся из main.go ДО wails.Run:
-// popup-модуль ищет окно по заголовку (убрать из таскбара, поставить у трея).
+// WindowTitle is the unique window title. It is set from main.go BEFORE
+// wails.Run: the popup package locates the window by title (taskbar hiding,
+// tray-side positioning, focus).
 var WindowTitle string
 
-// TrayBridge — то, чего приложение требует от трея (реализовано tray.Tray).
+// TrayBridge is what the app requires from the tray (implemented by tray.Tray).
 type TrayBridge interface {
     SetUpdatedLabel(at time.Time)
     SetAutoState(on bool)
     SetBusy(busy bool)
     Cooldown(d time.Duration)
     NotifyFailure(reason string)
-    SetDegraded(degraded bool, preferredKey, actualKey string) // резерв вместо выбранного
-    SetStale(stale bool)                                       // «нет связи»: не ответил никто
-    Retranslate()                                              // перевод меню и тултипа на текущий язык
+    SetDegraded(degraded bool, preferredKey, actualKey string) // fallback instead of the selected provider
+    SetStale(stale bool)                                       // "offline": nobody answered
+    Retranslate()                                              // retranslate the menu and tooltip to the current language
 }
 
-// ratesUpdate — payload события rates:update.
-// Provider — ключ ВЫБРАННОГО провайдера; Table.SourceKey — кто РЕАЛЬНО ответил.
-// Fallback=true означает: выбранный недоступен, показаны данные резерва.
+// ratesUpdate is the payload of the rates:update event.
+// Provider is the key of the SELECTED provider; Table.SourceKey is the one
+// that ACTUALLY answered. Fallback=true means: the selected provider is
+// unavailable, data comes from the fallback.
 type ratesUpdate struct {
     Table    *rates.Table      `json:"table"`
     Names    map[string]string `json:"names"`
@@ -44,24 +52,23 @@ type ratesUpdate struct {
     Fallback bool              `json:"fallback"`
 }
 
+// InitPayload is the full bootstrap state for the frontend.
 type InitPayload struct {
-    Version          string               `json:"version"`   // версия сборки (для «О программе»)
-    Config           config.Config        `json:"config"`
-    AutoEnabled      bool                 `json:"autostart_enabled"`
-    CooldownSec      int                  `json:"cooldown_sec"` // остаток кулдауна обновления
-    Provider         string               `json:"provider"`     // выбранный провайдер
-    Providers        []rates.ProviderInfo `json:"providers"`    // зарегистрированные провайдеры
-    ProviderStatuses []rates.ProviderStatus `json:"provider_statuses"` // диагностика провайдеров
-    Stale            bool                 `json:"stale"`        // «нет связи» (не ответил никто)
-    Lang             string               `json:"lang"`         // текущий язык
-    Languages        []i18n.Language      `json:"languages"`    // доступные языки
-    I18n             map[string]string    `json:"i18n"`         // словарь текущего языка для UI
-    Update           ratesUpdate          `json:"update"`
+    Version          string                 `json:"version"`   // build version (for the About tab)
+    Config           config.Config          `json:"config"`
+    AutoEnabled      bool                   `json:"autostart_enabled"`
+    CooldownSec      int                    `json:"cooldown_sec"` // seconds left in the refresh cooldown
+    Provider         string                 `json:"provider"`     // selected provider
+    Providers        []rates.ProviderInfo   `json:"providers"`    // registered providers
+    ProviderStatuses []rates.ProviderStatus `json:"provider_statuses"`
+    Stale            bool                   `json:"stale"`     // "offline" (nobody answered)
+    Lang             string                 `json:"lang"`      // current language
+    Languages        []i18n.Language        `json:"languages"` // available languages
+    I18n             map[string]string      `json:"i18n"`      // dictionary of the current language for the UI
+    Update           ratesUpdate            `json:"update"`
 }
 
-// App — центральное состояние приложения. Файлы пакета делят методы по
-// обязанностям: window.go — показ окна, refresh.go — обновление курсов,
-// settings.go — API для фронтенда, ticker.go — фоновый таймер.
+// App is the central application state.
 type App struct {
     ctx    context.Context
     cfg    *config.Config
@@ -71,12 +78,12 @@ type App struct {
 
     exiting       atomic.Bool
     busy          atomic.Bool
-    cooldownUntil atomic.Int64 // unix-время окончания кулдауна
-    stale         atomic.Bool  // «нет связи»: последняя попытка обновления не ответила
-    failures      atomic.Int64 // подряд идущих полных отказов (для backoff)
+    cooldownUntil atomic.Int64 // unix time of the cooldown end
+    stale         atomic.Bool  // "offline": the last refresh attempt failed completely
+    failures      atomic.Int64 // consecutive full failures (drives the backoff)
 
     retryMu    sync.Mutex
-    retryTimer *time.Timer // запланированный backoff-ретрай (максимум один)
+    retryTimer *time.Timer // the scheduled backoff retry (at most one)
 
     stopMu sync.Mutex
     stopCh chan struct{}
@@ -88,16 +95,17 @@ func New(cfg *config.Config, rm *rates.Manager, tb TrayBridge) *App {
 
 func (a *App) SetTray(tb TrayBridge) { a.trayB = tb }
 
-/* ------------------------- жизненный цикл Wails ------------------------- */
+/* ------------------------- Wails lifecycle hooks ------------------------- */
 
 func (a *App) Startup(ctx context.Context) {
     a.ctx = ctx
     a.startTicker()
-    go a.BackgroundRefresh(false) // прогрев без кулдауна
+    go a.BackgroundRefresh(false) // warm-up, no cooldown
 }
 
 func (a *App) BeforeClose(ctx context.Context) bool {
-    // Закрытие окна = скрытие (виджет живёт в трее). Выход — только через трей.
+    // Closing the window = hiding it (the widget lives in the tray).
+    // Quitting happens only via the tray menu.
     if a.exiting.Load() {
         return false
     }

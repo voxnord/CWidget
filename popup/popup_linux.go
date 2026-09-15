@@ -8,8 +8,9 @@ import (
 	"time"
 )
 
-// RemoveFromTaskbar на X11 выставляет EWMH-состояние skip_taskbar через wmctrl (best-effort).
-// На Wayland портативного способа нет — функция просто завершается без действий.
+// RemoveFromTaskbar sets the EWMH skip_taskbar state via wmctrl on X11
+// (best-effort). There is no portable way on Wayland — the function simply
+// does nothing there.
 func RemoveFromTaskbar(title string) {
     if t := os.Getenv("XDG_SESSION_TYPE"); t == "wayland" || t == "" {
         return
@@ -24,23 +25,23 @@ func RemoveFromTaskbar(title string) {
             if cmd.Run() == nil {
                 return
             }
-            time.Sleep(200 * time.Millisecond) // окно могло ещё не появиться
+            time.Sleep(200 * time.Millisecond) // the window may not exist yet
         }
     }()
 }
 
-// MoveNearTray — заглушка (позиционирование у трея зависит от DE).
+// MoveNearTray is a stub (tray-side positioning depends on the DE).
 func MoveNearTray(title string) {}
 
-// LockResize — заглушка (фиксирование размера на Linux зависит от WM;
-// при необходимости можно добавить через _MOTIF_WM_HINTS/xprop).
+// LockResize is a stub (fixed size depends on the WM; can be added via
+// _MOTIF_WM_HINTS/xprop if needed).
 func LockResize(title string) {}
 
-// RoundCorners — заглушка: скругление обеспечивает CSS border-radius,
-// а его видимость зависит от композитора (прозрачность окон).
+// RoundCorners is a stub: rounding comes from the CSS border-radius, and its
+// visibility depends on the compositor (window transparency).
 func RoundCorners(title string) {}
 
-// FocusWindow активирует окно по заголовку (X11, best-effort через wmctrl).
+// FocusWindow activates the window by title (X11, best-effort via wmctrl).
 func FocusWindow(title string) {
     if t := os.Getenv("XDG_SESSION_TYPE"); t == "wayland" || t == "" {
         return

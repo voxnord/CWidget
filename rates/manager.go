@@ -11,49 +11,51 @@ import (
 	"time"
 )
 
-// FetchTimeoutPerProvider — жёсткий лимит на ОДНУ попытку одного провайдера.
-// Без него зависший/недоступный источник съедал бы весь таймаут http-клиента
-// (15 с) до перехода каскада к резерву, и пользователь смотрел бы на
-// «Обновление…» непозволительно долго. Frankfurter (3 запроса за Fetch)
-// укладывается в лимит с запасом.
+// FetchTimeoutPerProvider is a hard limit for ONE attempt of ONE provider.
+// Without it a hanging source would consume the whole http-client timeout
+// (15s) before the failover chain moves to the fallback, leaving the user
+// staring at "Updating…". Frankfurter (3 requests per Fetch) fits into the
+// limit with room to spare.
 const FetchTimeoutPerProvider = 8 * time.Second
 
-// Registration — связка стабильного ключа провайдера и его реализации.
-// Ключ хранится в конфиге и не зависит от человекочитаемого имени (Name()).
+// Registration binds a stable provider key to its implementation.
+// The key is stored in the config and is independent of the human-readable
+// name (Name()).
 type Registration struct {
     Key      string
     Provider Provider
 }
 
-// ProviderInfo — сведения о провайдере для UI (список в настройках строится из него).
+// ProviderInfo describes a provider for the UI (the settings list is built
+// from it).
 type ProviderInfo struct {
     Key  string `json:"key"`
     Name string `json:"name"`
 }
 
-// ProviderStatus — исход последней попытки конкретного провайдера.
-// Заполняется менеджером при каждом Fetch; предназначен для диагностики в UI.
+// ProviderStatus is the outcome of the last attempt of a specific provider.
+// Filled by the manager on every Fetch; intended for UI diagnostics.
 type ProviderStatus struct {
     Key       string    `json:"key"`
     Name      string    `json:"name"`
-    Tried     bool      `json:"tried"`                // была ли хоть одна попытка
-    OK        bool      `json:"ok"`                   // исход последней попытки
-    LastErr   string    `json:"last_err,omitempty"`   // полный текст последней ошибки
+    Tried     bool      `json:"tried"`              // was there at least one attempt
+    OK        bool      `json:"ok"`                 // outcome of the last attempt
+    LastErr   string    `json:"last_err,omitempty"` // full text of the last error
     LastErrAt time.Time `json:"last_err_at,omitempty"`
     LastOKAt  time.Time `json:"last_ok_at,omitempty"`
 }
 
-// Manager хранит последний удачный снимок, распределяет запросы по провайдерам
-// и переживает рестарты благодаря дисковому кэшу.
+// Manager keeps the last successful snapshot, distributes requests across
+// providers and survives restarts thanks to the disk cache.
 //
-// Список валют строго привязан к текущему снимку: смена провайдера полностью
-// заменяет набор кодов и имён — «хвосты» от предыдущего источника невозможны.
-// Порядок обхода при обновлении: выбранный провайдер первым, остальные —
-// в порядке регистрации как резерв (отказоустойчивость).
+// The currency list is strictly bound to the current snapshot: switching
+// providers fully replaces the set of codes and names — no "tails" from the
+// previous source are possible. Traversal order on refresh: the selected
+// provider first, the rest in registration order as fallbacks.
 type Manager struct {
     mu        sync.RWMutex
     regs      []Registration
-    preferred string // ключ выбранного провайдера (всегда непустой, см. main.go)
+    preferred string // key of the selected provider (always non-empty, see main.go)
     current   *Table
     statuses  map[string]*ProviderStatus
     cachePath string
@@ -72,23 +74,23 @@ func NewManager(regs []Registration, cachePath string) (*Manager, error) {
     return m, nil
 }
 
-/* ------------------------- реестр провайдеров ---------------------------- */
+/* --------------------------- provider registry --------------------------- */
 
-// SetPreferred выбирает активный провайдер по ключу.
+// SetPreferred selects the active provider by key.
 func (m *Manager) SetPreferred(key string) {
     m.mu.Lock()
     defer m.mu.Unlock()
     m.preferred = key
 }
 
-// Preferred — ключ выбранного провайдера.
+// Preferred returns the key of the selected provider.
 func (m *Manager) Preferred() string {
     m.mu.RLock()
     defer m.mu.RUnlock()
     return m.preferred
 }
 
-// HasKey — существует ли провайдер с таким ключом.
+// HasKey reports whether a provider with this key exists.
 func (m *Manager) HasKey(key string) bool {
     m.mu.RLock()
     defer m.mu.RUnlock()
@@ -100,7 +102,7 @@ func (m *Manager) HasKey(key string) bool {
     return false
 }
 
-// Providers — снапшот списка зарегистрированных провайдеров для UI.
+// Providers returns a snapshot of the registered providers for the UI.
 func (m *Manager) Providers() []ProviderInfo {
     m.mu.RLock()
     defer m.mu.RUnlock()
@@ -111,7 +113,7 @@ func (m *Manager) Providers() []ProviderInfo {
     return out
 }
 
-// Statuses — снапшот состояний всех провайдеров (для диагностики в настройках).
+// Statuses returns a snapshot of all provider states (for UI diagnostics).
 func (m *Manager) Statuses() []ProviderStatus {
     m.mu.RLock()
     defer m.mu.RUnlock()
@@ -128,7 +130,7 @@ func (m *Manager) Statuses() []ProviderStatus {
     return out
 }
 
-// recordStatus фиксирует исход попытки (вызывать под Lock не нужно — сам берёт Lock).
+// recordStatus stores the outcome of an attempt (takes its own Lock).
 func (m *Manager) recordStatus(key string, err error) {
     m.mu.Lock()
     defer m.mu.Unlock()
@@ -149,7 +151,7 @@ func (m *Manager) recordStatus(key string, err error) {
     st.LastOKAt = time.Now()
 }
 
-// ordered — порядок обхода: выбранный первым, остальные резервом.
+// ordered is the traversal order: the selected one first, the rest as backup.
 func (m *Manager) ordered() []Registration {
     m.mu.RLock()
     defer m.mu.RUnlock()
@@ -170,15 +172,16 @@ func (m *Manager) ordered() []Registration {
     return out
 }
 
-/* ----------------------------- обновление -------------------------------- */
+/* -------------------------------- refresh -------------------------------- */
 
-// TryRefresh проходит провайдеров по порядку; первый удачный снимок становится текущим
-// и ПОЛНОСТЬЮ заменяет прежний (вместе с набором валют и имён).
-// Каждая попытка ограничена FetchTimeoutPerProvider независимо от остальных.
+// TryRefresh walks the providers in order; the first successful snapshot
+// becomes current and fully replaces the previous one (together with the
+// currency set and names). Each attempt is limited by FetchTimeoutPerProvider
+// independently of the others.
 func (m *Manager) TryRefresh(ctx context.Context) (*Table, error) {
     if !m.busy.CompareAndSwap(false, true) {
         if t, ok := m.Current(); ok {
-            return t, nil // уже кто-то обновляет — вернём текущее
+            return t, nil // someone is already refreshing — return the current data
         }
     }
     defer m.busy.Store(false)
@@ -197,7 +200,7 @@ func (m *Manager) TryRefresh(ctx context.Context) (*Table, error) {
             continue
         }
         tbl.FetchedAt = tbl.FetchedAt.UTC()
-        tbl.SourceKey = reg.Key // ключ для локализации имени на фронте
+        tbl.SourceKey = reg.Key // key for localizing the name on the frontend
         m.mu.Lock()
         m.current = tbl
         m.mu.Unlock()
@@ -205,20 +208,21 @@ func (m *Manager) TryRefresh(ctx context.Context) (*Table, error) {
         return tbl, nil
     }
     if lastErr == nil {
-        lastErr = errors.New("rates: список провайдеров пуст")
+        lastErr = errors.New("rates: provider list is empty")
     }
     return nil, lastErr
 }
 
-// Current — последний снимок (возможно из кэша прошлого запуска).
+// Current returns the last snapshot (possibly from the previous run's cache).
 func (m *Manager) Current() (*Table, bool) {
     m.mu.RLock()
     defer m.mu.RUnlock()
     return m.current, m.current != nil
 }
 
-// Names — справочник «код → имя» СТРОГО текущего провайдера.
-// При смене источника набор заменяется целиком, без накопления.
+// Names returns the "code -> name" dictionary of STRICTLY the current
+// provider. On a source switch the set is replaced wholesale, without
+// accumulation.
 func (m *Manager) Names() map[string]string {
     m.mu.RLock()
     defer m.mu.RUnlock()

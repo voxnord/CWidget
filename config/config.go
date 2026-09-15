@@ -1,3 +1,5 @@
+// Package config persists application settings as a JSON file in the
+// user's OS configuration directory.
 package config
 
 import (
@@ -12,20 +14,21 @@ const (
     configName = "config.json"
 )
 
+// Config holds all persisted settings.
 type Config struct {
-    Base       string   `json:"base_currency"`                // валюта слева по умолчанию
-    Target     string   `json:"target_currency"`              // валюта справа по умолчанию
-    AutoStart  bool     `json:"autostart"`                    // зеркало состояния (источник истины — ОС)
-    RefreshMin int      `json:"refresh_interval_minutes"`     // период фонового опроса
-    Provider   string   `json:"provider,omitempty"`           // выбранный источник курсов (ключ)
+    Base       string   `json:"base_currency"`                // default left currency
+    Target     string   `json:"target_currency"`              // default right currency
+    AutoStart  bool     `json:"autostart"`                    // mirror only; the OS is the source of truth
+    RefreshMin int      `json:"refresh_interval_minutes"`     // background polling period
+    Provider   string   `json:"provider,omitempty"`           // selected rates source (key)
     Theme      string   `json:"theme,omitempty"`              // "dark" | "light"
-    Language   string   `json:"language,omitempty"`           // код языка ("ru", "en", ...)
-    Priority   []string `json:"providers_priority,omitempty"` // порядок регистрации провайдеров
+    Language   string   `json:"language,omitempty"`           // language code ("ru", "en", ...)
+    Priority   []string `json:"providers_priority,omitempty"` // provider registration order
 }
 
-// Dir — каталог данных приложения (%AppData%/Voxs_CurrencyWidget).
-// Используется и самим конфигом, и main.go (папка профиля WebView2),
-// чтобы всё данные приложения жили в одном месте.
+// Dir returns the application data directory (%AppData%/Voxs_CurrencyWidget).
+// It is used by the config itself and by main.go (the WebView2 profile
+// folder), so all app data lives in one place.
 func Dir() (string, error) {
     root, err := os.UserConfigDir() // %AppData% / ~/.config
     if err != nil {
@@ -34,19 +37,20 @@ func Dir() (string, error) {
     return filepath.Join(root, appFolder), nil
 }
 
-// Path — путь к config.json.
+// Path is the path to config.json.
 func Path() (string, error) {
     d, err := Dir()
     return filepath.Join(d, configName), err
 }
 
-// DataFile — сторонний файл в той же папке (например, кэш курсов).
+// DataFile returns a path for an auxiliary file in the same folder
+// (e.g. the rates cache).
 func DataFile(name string) (string, error) {
     d, err := Dir()
     return filepath.Join(d, name), err
 }
 
-// Load читает конфиг; при первом запуске создаёт дефолтный.
+// Load reads the config; on the first launch it creates a default one.
 func Load() (*Config, error) {
     p, err := Path()
     if err != nil {
@@ -81,7 +85,8 @@ func sanitize(c *Config) {
     if c.Theme != "light" {
         c.Theme = "dark"
     }
-    // Валидность языка проверит i18n в main.go (конфиг не должен о нём знать).
+    // Language validity is checked by i18n in main.go (the config package
+    // must not know about it).
     if c.RefreshMin < 5 {
         c.RefreshMin = 5
     }
@@ -90,7 +95,7 @@ func sanitize(c *Config) {
     }
 }
 
-// Save пишет конфиг атомарно (tmp + rename).
+// Save writes the config atomically (tmp + rename).
 func Save(c *Config) error {
     d, err := Dir()
     if err != nil {

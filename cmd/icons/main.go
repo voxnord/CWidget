@@ -1,19 +1,22 @@
-// Утилита управления иконками приложения. Единственный источник иконок — assets/.
+// Command icons manages the application icons. assets/ is the single source
+// of truth.
 //
-//	go run ./cmd/icons gen     — сгенерировать иконку по умолчанию в assets/.
-//	                           Пишет ТОЛЬКО в assets/, build/ не трогает.
-//	                           Существующие файлы не перезаписывает (без -f).
-//	go run ./cmd/icons gen -f  — перезаписать существующие иконки дефолтной.
-//	go run ./cmd/icons sync    — подготовить сборку: гарантирует наличие ОБЕИХ
-//	                           иконок в assets/ (ICO создаётся из PNG, PNG
-//	                           извлекается из ICO) и синхронизирует их в build/.
+//	go run ./cmd/icons gen     — generate the default icon into assets/.
+//	                           Writes ONLY to assets/, never touches build/.
+//	                           Does not overwrite existing files (without -f).
+//	go run ./cmd/icons gen -f  — overwrite existing icons with the default one.
+//	go run ./cmd/icons sync    — prepare the build: guarantees BOTH icons exist
+//	                           in assets/ (the ICO is created from the PNG,
+//	                           the PNG is extracted from the ICO) and copies
+//	                           them into build/.
 //
-// Почему это важно:
-//   - main.go содержит //go:embed assets/icon.png и assets/icon.ico —
-//     отсутствие ЛЮБОГО из файлов ломает компиляцию проекта;
-//   - иконку exe Wails CLI берёт исключительно из build/windows/icon.ico,
-//     а иконку инсталлера/Linux — из build/appicon.png; других путей у CLI нет,
-//     поэтому sync и переносит assets/ именно туда.
+// Why this matters:
+//   - main.go contains //go:embed assets/icon.png and assets/icon.ico —
+//     a missing ANY of these files breaks the build of the whole project;
+//   - the exe icon is read by the Wails CLI exclusively from
+//     build/windows/icon.ico, and the installer/Linux icon from
+//     build/appicon.png — the CLI has no other paths, so sync copies
+//     assets/ exactly there.
 package main
 
 import (
@@ -27,8 +30,9 @@ import (
 	"path/filepath"
 )
 
-// Пути. Суффикс Path — намеренно: имена без суффикса конфликтовали бы
-// с функциями buildICO и т.п. (в Go const и func не могут совпадать в пакете).
+// Paths. The "Path" suffix is intentional: bare names would collide with
+// the buildICO function (in Go a const and a func cannot share a name
+// within a package).
 const (
     assetPNGPath = "assets/icon.png"
     assetICOPath = "assets/icon.ico"
@@ -36,7 +40,7 @@ const (
     buildICOPath = "build/windows/icon.ico"
 )
 
-const S = 256 // размер генерируемой иконки
+const S = 256 // size of the generated icon
 
 func main() {
     if len(os.Args) < 2 {
@@ -48,7 +52,7 @@ func main() {
         force := len(os.Args) > 2 && (os.Args[2] == "-f" || os.Args[2] == "--force")
         gen(force)
     case "sync":
-        sync()
+        syncIcons()
     default:
         usage()
         os.Exit(2)
@@ -56,16 +60,16 @@ func main() {
 }
 
 func usage() {
-    fmt.Println(`Использование: go run ./cmd/icons <команда>
+    fmt.Println(`Usage: go run ./cmd/icons <command>
 
-  gen      сгенерировать иконку по умолчанию в assets/ (существующие не трогает)
-  gen -f   перезаписать существующие иконки дефолтной
-  sync     подготовить сборку: дополнить недостающие иконки в assets/
-           и синхронизировать assets/ -> build/ (иконка exe)`)
+  gen      generate the default icon into assets/ (existing files are kept)
+  gen -f   overwrite existing icons with the default one
+  sync     prepare the build: fill in missing icons in assets/
+           and sync assets/ -> build/ (the exe icon)`)
 }
 
 func fail(format string, a ...any) {
-    fmt.Fprintf(os.Stderr, "Ошибка: "+format+"\n", a...)
+    fmt.Fprintf(os.Stderr, "Error: "+format+"\n", a...)
     os.Exit(1)
 }
 
@@ -74,13 +78,13 @@ func fileExists(p string) bool {
     return err == nil
 }
 
-/* -------------------------------- gen ------------------------------------ */
+/* --------------------------------- gen ----------------------------------- */
 
 func gen(force bool) {
     for _, p := range []string{assetPNGPath, assetICOPath} {
         if fileExists(p) && !force {
-            fail("%s уже существует — не перезаписываю ваши иконки.\n"+
-                "Если нужна именно дефолтная иконка: go run ./cmd/icons gen -f", p)
+            fail("%s already exists — not overwriting your icons.\n"+
+                "If you need the default icon specifically: go run ./cmd/icons gen -f", p)
         }
     }
 
@@ -94,7 +98,7 @@ func gen(force bool) {
             t := float64(x+y) / (2 * float64(S))
             c := mix(top, bot, t)
             if !insideRounded(x, y, S, radius) {
-                c = color.RGBA{0, 0, 0, 0} // прозрачный угол
+                c = color.RGBA{0, 0, 0, 0} // transparent corner
             }
             img.SetRGBA(x, y, c)
         }
@@ -112,43 +116,44 @@ func gen(force bool) {
     }
     mustWrite(assetPNGPath, buf.Bytes())
     mustWrite(assetICOPath, buildICO(buf.Bytes()))
-    fmt.Printf("Созданы: %s и %s\n", assetPNGPath, assetICOPath)
-    fmt.Println("Для иконки exe выполните: go run ./cmd/icons sync")
+    fmt.Printf("Created: %s and %s\n", assetPNGPath, assetICOPath)
+    fmt.Println("For the exe icon run: go run ./cmd/icons sync")
 }
 
 /* -------------------------------- sync ----------------------------------- */
 
-func sync() {
+func syncIcons() {
     pngExists := fileExists(assetPNGPath)
     icoExists := fileExists(assetICOPath)
 
     if !pngExists && !icoExists {
-        fail("в assets/ нет ни icon.png, ни icon.ico.\n"+
-            "Выполните 'go run ./cmd/icons gen' или положите свои иконки\n"+
-            "(квадратный PNG, ≥256×256, желательно 1024×1024, и ICO при желании).")
+        fail("assets/ has neither icon.png nor icon.ico.\n" +
+            "Run 'go run ./cmd/icons gen' or put your own icons there\n" +
+            "(a square PNG, >=256x256, ideally 1024x1024, plus an ICO if you have one).")
     }
 
-    // PNG отсутствует, ICO есть: пробуем извлечь PNG из ICO.
-    // Без assets/icon.png не соберётся embed в main.go (трей Linux/macOS).
+    // PNG missing, ICO present: try to extract a PNG from the ICO.
+    // Without assets/icon.png the //go:embed in main.go (the Linux/macOS
+    // tray icon) will not compile.
     if !pngExists {
         b, err := extractPNGFromICO(assetICOPath)
         if err != nil {
-            fail("нет %s, а из %s PNG извлечь не удалось (%v).\n"+
-                "Положите %s вручную и повторите sync.", assetPNGPath, assetICOPath, err, assetPNGPath)
+            fail("%s is missing and no PNG could be extracted from %s (%v).\n"+
+                "Put %s there manually and re-run sync.", assetPNGPath, assetICOPath, err, assetPNGPath)
         }
         mustWrite(assetPNGPath, b)
-        fmt.Printf("Восстановлен %s (извлечён из %s)\n", assetPNGPath, assetICOPath)
+        fmt.Printf("Restored %s (extracted from %s)\n", assetPNGPath, assetICOPath)
     }
 
-    // ICO отсутствует, PNG есть: создаём ICO прямо в assets/ —
-    // без него //go:embed в main.go не даст проекту скомпилироваться.
+    // ICO missing, PNG present: create the ICO right in assets/ —
+    // without it the //go:embed in main.go blocks compilation.
     if !fileExists(assetICOPath) {
         pngBytes, err := os.ReadFile(assetPNGPath)
         if err != nil {
             fail("%v", err)
         }
         mustWrite(assetICOPath, buildICO(pngBytes))
-        fmt.Printf("Создан %s (из %s) — без него сборка не компилируется\n", assetICOPath, assetPNGPath)
+        fmt.Printf("Created %s (from %s) — the build does not compile without it\n", assetICOPath, assetPNGPath)
     }
 
     pngBytes, err := os.ReadFile(assetPNGPath)
@@ -161,45 +166,46 @@ func sync() {
         fail("%v", err)
     }
 
-    // Перенос в места, которые жёстко читает Wails CLI.
+    // Copy to the locations the Wails CLI reads hard.
     mustWrite(buildPNGPath, pngBytes)
     mustWrite(buildICOPath, icoBytes)
 
-    fmt.Println("Иконки синхронизированы:")
+    fmt.Println("Icons synced:")
     fmt.Printf("  %-24s <- %s\n", buildPNGPath, assetPNGPath)
     fmt.Printf("  %-24s <- %s\n", buildICOPath, assetICOPath)
-    fmt.Println("Теперь: wails build")
+    fmt.Println("Now run: wails build")
 }
 
-// checkPNG — мягкая валидация: не квадрат/мелкий — предупреждаем, но не блокируем.
+// checkPNG is a soft validation: a non-square or tiny image is a warning,
+// not an error.
 func checkPNG(pngBytes []byte) {
     cfg, err := png.DecodeConfig(bytes.NewReader(pngBytes))
     if err != nil {
-        fail("%s — не валидный PNG: %v", assetPNGPath, err)
+        fail("%s is not a valid PNG: %v", assetPNGPath, err)
     }
     if cfg.Width != cfg.Height {
-        fmt.Printf("ВНИМАНИЕ: PNG не квадратный (%dx%d) — иконка может выглядеть сплюснутой\n", cfg.Width, cfg.Height)
+        fmt.Printf("WARNING: the PNG is not square (%dx%d) — the icon may look squashed\n", cfg.Width, cfg.Height)
     }
     if cfg.Width < 256 {
-        fmt.Printf("ВНИМАНИЕ: %dx%d меньше 256 — рекомендую 256×256 или 1024×1024\n", cfg.Width, cfg.Height)
+        fmt.Printf("WARNING: %dx%d is below 256 — 256x256 or 1024x1024 is recommended\n", cfg.Width, cfg.Height)
     }
 }
 
-// extractPNGFromICO достаёт PNG-изображение из ICO формата «PNG inside»
-// (так устроены современные ICO, включая создаваемые этой утилитой).
-// Из нескольких подходящих выбирает наибольший.
+// extractPNGFromICO pulls the PNG image out of a "PNG inside" ICO
+// (how modern ICO files are built, including the ones this tool creates).
+// If several images match, the largest one is chosen.
 func extractPNGFromICO(path string) ([]byte, error) {
     raw, err := os.ReadFile(path)
     if err != nil {
         return nil, err
     }
     if len(raw) < 6 {
-        return nil, fmt.Errorf("файл меньше заголовка ICO")
+        return nil, fmt.Errorf("file is smaller than the ICO header")
     }
     typ := binary.LittleEndian.Uint16(raw[2:4])
     count := binary.LittleEndian.Uint16(raw[4:6])
     if typ != 1 || count == 0 {
-        return nil, fmt.Errorf("это не ICO-файл")
+        return nil, fmt.Errorf("not an ICO file")
     }
     sig := []byte{0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n'}
     var best []byte
@@ -219,7 +225,7 @@ func extractPNGFromICO(path string) ([]byte, error) {
         }
     }
     if best == nil {
-        return nil, fmt.Errorf("внутри ICO нет PNG-изображения (вероятно, старый BMP-формат)")
+        return nil, fmt.Errorf("no PNG image inside the ICO (probably the legacy BMP format)")
     }
     return best, nil
 }
@@ -233,7 +239,7 @@ func mustWrite(path string, b []byte) {
     }
 }
 
-/* ------------------------ геометрия (для gen) ----------------------------- */
+/* ------------------------ geometry (for gen) ----------------------------- */
 
 func pt(x, y int) image.Point { return image.Pt(x, y) }
 
@@ -289,18 +295,18 @@ func fillTriangle(img *image.RGBA, a, b, c image.Point, col color.RGBA) {
     }
 }
 
-/* ----------------------------- формат ICO -------------------------------- */
+/* ------------------------------- ICO format ------------------------------ */
 
 func buildICO(pngBytes []byte) []byte {
     var out bytes.Buffer
     binary.Write(&out, binary.LittleEndian, uint16(0)) // reserved
-    binary.Write(&out, binary.LittleEndian, uint16(1)) // тип: иконка
-    binary.Write(&out, binary.LittleEndian, uint16(1)) // количество изображений
+    binary.Write(&out, binary.LittleEndian, uint16(1)) // type: icon
+    binary.Write(&out, binary.LittleEndian, uint16(1)) // image count
 
-    // ICONDIRENTRY (16 байт); 256x256 кодируется нулями
+    // ICONDIRENTRY (16 bytes); 256x256 is encoded as zeroes
     out.WriteByte(0) // width
     out.WriteByte(0) // height
-    out.WriteByte(0) // палитра
+    out.WriteByte(0) // palette
     out.WriteByte(0) // reserved
     binary.Write(&out, binary.LittleEndian, uint16(1))  // planes
     binary.Write(&out, binary.LittleEndian, uint16(32)) // bpp

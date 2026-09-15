@@ -10,7 +10,7 @@ import (
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
-/* --------------------------- API для фронтенда --------------------------- */
+/* --------------------------- frontend-facing API ------------------------- */
 
 func (a *App) GetInitState() InitPayload {
     a.cfgMu.Lock()
@@ -45,9 +45,10 @@ func (a *App) GetInitState() InitPayload {
     }
 }
 
-// SetProvider — смена источника курсов. Универсальна: работает с любым ключом,
-// присутствующим в реестре менеджера; на стороне провайдеров не нужно ни строчки.
-// Ошибки возвращаются КЛЮЧАМИ локализации ("err.xxx[|парам]"), перевод — на фронте.
+// SetProvider switches the rates source. It is generic: it works with any key
+// present in the manager registry and requires zero per-provider code.
+// Errors are returned as localization KEYS ("err.xxx[|arg]"), the frontend
+// translates them.
 func (a *App) SetProvider(key string) error {
     key = strings.ToLower(strings.TrimSpace(key))
     if !a.ratesM.HasKey(key) {
@@ -61,14 +62,14 @@ func (a *App) SetProvider(key string) error {
         return saveErr
     }
     a.ratesM.SetPreferred(key)
-    // Немедленно подтянуть данные нового источника (с кулдауном — защита
-    // от «полистать список и устроить шторм запросов»).
+    // Fetch the new source immediately (with a cooldown — protection against
+    // "scroll the list and storm the APIs").
     go a.BackgroundRefresh(true)
     return nil
 }
 
-// SetTheme — смена темы ("dark" | "light"). Применяется немедленно:
-// фронтенд получает событие theme:changed и переключает класс на body.
+// SetTheme switches the theme ("dark" | "light"). Applied immediately: the
+// frontend receives theme:changed and toggles the class on <body>.
 func (a *App) SetTheme(theme string) error {
     theme = strings.ToLower(strings.TrimSpace(theme))
     if theme != "dark" && theme != "light" {
@@ -87,9 +88,10 @@ func (a *App) SetTheme(theme string) error {
     return nil
 }
 
-// SetLanguage — смена языка интерфейса. Один вызов делает всё:
-// сохраняет выбор, переключает словарь, переводит меню трея (Retranslate)
-// и рассылает словарь фронтенду. Работает и из настроек, и из подменю трея.
+// SetLanguage switches the UI language. One call does everything: persists
+// the choice, swaps the dictionary, retranlsates the tray menu (Retranslate)
+// and broadcasts the dictionary to the frontend. Works from both the settings
+// and the tray language submenu.
 func (a *App) SetLanguage(lang string) error {
     lang = strings.ToLower(strings.TrimSpace(lang))
     if !i18n.Has(lang) {
@@ -142,7 +144,7 @@ func (a *App) SetDefaults(base, target string, minutes int) error {
     }
     if intervalChanged {
         a.stopTicker()
-        a.startTicker() // первый тик — через новый интервал от текущего момента
+        a.startTicker() // first tick — a full new interval from now
     }
     if a.ctx != nil {
         a.cfgMu.Lock()
@@ -170,7 +172,7 @@ func (a *App) SetAutoStart(enable bool) error {
         return saveErr
     }
     if a.trayB != nil {
-        a.trayB.SetAutoState(enable) // зафиксировать факт
+        a.trayB.SetAutoState(enable) // pin the actual state
     }
     if a.ctx != nil {
         runtime.EventsEmit(a.ctx, "autostart:changed", enable)

@@ -1,3 +1,4 @@
+// CWidget — a currency converter tray widget built with Go and Wails v2.
 package main
 
 import (
@@ -31,8 +32,9 @@ var iconICO []byte
 //go:embed assets/icon.png
 var iconPNG []byte
 
-// winTitle — внутренний уникальный заголовок окна: popup-модуль ищет окно
-// по нему (таскбар/позиция/фокус). Пользователю не виден, менять не обязательно.
+// winTitle is the internal, unique window title. The popup package locates
+// the window by it (taskbar hiding, tray-side positioning, focus). It is not
+// visible to the user and does not need to be changed.
 const winTitle = "cw-floating-converter"
 
 func main() {
@@ -41,14 +43,16 @@ func main() {
         log.Fatalf("config: %v", err)
     }
 
-    // Локализация: словари ДО создания трея; нормализация языка из конфига.
+    // i18n: load dictionaries BEFORE creating the tray (it must speak the
+    // configured language from the very start), then normalize the language
+    // stored in the config.
     if err := i18n.Load(); err != nil {
         log.Fatalf("i18n: %v", err)
     }
     if !i18n.Has(cfg.Language) {
         cfg.Language = i18n.DefaultLanguage()
         if err := config.Save(cfg); err != nil {
-            log.Printf("config: не удалось сохранить язык: %v", err)
+            log.Printf("config: failed to persist language: %v", err)
         }
     }
     if err := i18n.SetLanguage(cfg.Language); err != nil {
@@ -57,24 +61,26 @@ func main() {
 
     httpc := &http.Client{Timeout: 15 * time.Second}
 
-    // ---- Реестр провайдеров: ЕДИНСТВЕННОЕ место для подключения нового API. ----
+    // ---- Provider registry: the SINGLE place to plug in a new rates API.
+    // Add one entry here and the provider automatically appears in the
+    // settings list and in the failover chain. No other code changes needed.
     factory := map[string]func(*http.Client) rates.Provider{
         "cbr":         func(c *http.Client) rates.Provider { return rates.NewCBR(c) },
         "frankfurter": func(c *http.Client) rates.Provider { return rates.NewFrankfurter(c) },
     }
     order := cfg.Priority
     if len(order) == 0 {
-        order = []string{"cbr", "frankfurter"}
+        order = []string{"cbr", "frankfurter"} // default failover order
     }
     var regs []rates.Registration
     for _, key := range order {
         if mk, ok := factory[key]; ok {
             regs = append(regs, rates.Registration{Key: key, Provider: mk(httpc)})
         } else {
-            log.Printf("config: неизвестный провайдер %q — пропущен", key)
+            log.Printf("config: unknown provider %q — skipped", key)
         }
     }
-    if len(regs) == 0 {
+    if len(regs) == 0 { // guard against a broken providers_priority
         regs = append(regs,
             rates.Registration{Key: "cbr", Provider: rates.NewCBR(httpc)},
             rates.Registration{Key: "frankfurter", Provider: rates.NewFrankfurter(httpc)},
@@ -84,13 +90,14 @@ func main() {
     cachePath, _ := config.DataFile("rates-cache.json")
     manager, err := rates.NewManager(regs, cachePath)
     if err != nil {
-        log.Printf("rates: кэш не загружен (%v)", err)
+        log.Printf("rates: cache not loaded (%v)", err)
     }
 
+    // Normalize the selected provider: empty/invalid -> the first registered one.
     if !manager.HasKey(cfg.Provider) {
         cfg.Provider = regs[0].Key
         if err := config.Save(cfg); err != nil {
-            log.Printf("config: не удалось сохранить провайдера: %v", err)
+            log.Printf("config: failed to save provider: %v", err)
         }
     }
     manager.SetPreferred(cfg.Provider)
@@ -110,8 +117,8 @@ func main() {
     appCore.SetTray(trayCtl)
     go trayCtl.Run()
 
-    // Профиль WebView2 — внутрь папки данных приложения,
-    // чтобы в %APPDATA% не заводилась отдельная папка "<имя_exe>.exe".
+    // Keep the WebView2 user-data profile inside the app data folder, so the
+    // system AppData does not grow a separate "<exe name>.exe" directory.
     webviewData := ""
     if d, err := config.Dir(); err == nil {
         webviewData = filepath.Join(d, "EBWebView")
@@ -122,18 +129,18 @@ func main() {
         Title:       winTitle,
         Width:       380,
         Height:      260,
-        Frameless:   true, // рамки нет — наше оформление
-        StartHidden: true,  // стартует свёрнутым в трей
+        Frameless:   true, // no native frame — the UI provides its own chrome
+        StartHidden: true,  // starts minimized to the tray
         AssetServer: &assetserver.Options{Assets: assets},
         OnStartup:     appCore.Startup,
-        OnBeforeClose: appCore.BeforeClose, // закрытие = Hide
+        OnBeforeClose: appCore.BeforeClose, // closing the window = hide
         OnDomReady: func(_ context.Context) {
             popup.RemoveFromTaskbar(winTitle)
             popup.LockResize(winTitle)
             popup.MoveNearTray(winTitle)
             popup.RoundCorners(winTitle)
         },
-        // «Стекло» + прозрачность под скруглённые углы; фиксированный профиль.
+        // Translucency + transparency for the rounded corners; fixed webview profile.
         Windows: &windows.Options{
             WebviewIsTransparent:              true,
             WindowIsTranslucent:               true,

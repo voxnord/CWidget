@@ -1,11 +1,13 @@
-// Package i18n — минималистичная локализация: JSON-словари из locales/*.json.
+// Package i18n provides minimalistic localization backed by JSON
+// dictionaries in locales/*.json.
 //
-// Как добавить язык (никакого Go-кода менять не нужно):
-//  1. скопируйте locales/en.json в locales/de.json (имя файла = код языка);
-//  2. переведите значения, ключ "lang.name" = самоназвание ("Deutsch");
-//  3. пересоберите приложение — язык появится в настройках и в подменю трея.
+// How to add a language:
+//  1. copy locales/en.json to locales/de.json (the file name = the language code);
+//  2. translate the values; the "lang.name" key is the endonym ("Deutsch");
+//  3. rebuild the app — the language appears in the settings and in the tray
+//     submenu automatically.
 //
-// Недостающие ключи берутся из эталонного locales/en.json.
+// Missing keys fall back to the reference locales/en.json.
 package i18n
 
 import (
@@ -22,15 +24,17 @@ import (
 //go:embed locales/*.json
 var localeFS embed.FS
 
-// fallbackLang — эталонный словарь; переопределяется в Load(), если en.json нет.
+// fallbackLang is the reference dictionary; redefined in Load() when
+// en.json is absent.
 var fallbackLang = "en"
 
 const defaultLang = "ru"
 
-// Language — описание языка для UI (список в настройках и подменю трея).
+// Language describes a language for the UI (the settings list and the tray
+// submenu are built from it).
 type Language struct {
     Code string `json:"code"`
-    Name string `json:"name"` // самоназвание: "Русский", "English", "Deutsch"
+    Name string `json:"name"` // endonym: "Русский", "English", "Deutsch"
 }
 
 var (
@@ -39,7 +43,8 @@ var (
     cur   string
 )
 
-// Load читает все locales/*.json. Битый файл не роняет приложение — пропускается.
+// Load reads all locales/*.json. A broken file does not crash the app —
+// it is skipped.
 func Load() error {
     entries, err := localeFS.ReadDir("locales")
     if err != nil {
@@ -62,7 +67,7 @@ func Load() error {
         found[code] = d
     }
     if len(found) == 0 {
-        return errors.New("i18n: в locales/ не найдено ни одного валидного JSON")
+        return errors.New("i18n: no valid JSON found in locales/")
     }
     if _, ok := found[fallbackLang]; !ok {
         fallbackLang = sortedCodes(found)[0]
@@ -82,7 +87,7 @@ func sortedCodes(m map[string]map[string]string) []string {
     return codes
 }
 
-// Has — существует ли язык с таким кодом.
+// Has reports whether a language with this code exists.
 func Has(code string) bool {
     mu.RLock()
     defer mu.RUnlock()
@@ -90,7 +95,8 @@ func Has(code string) bool {
     return ok
 }
 
-// DefaultLanguage — язык по умолчанию ("ru"), либо первый доступный по алфавиту.
+// DefaultLanguage returns the default language ("ru") or the first
+// alphabetically available one.
 func DefaultLanguage() string {
     mu.RLock()
     defer mu.RUnlock()
@@ -100,25 +106,25 @@ func DefaultLanguage() string {
     return sortedCodes(dicts)[0]
 }
 
-// SetLanguage переключает текущий язык (код должен существовать).
+// SetLanguage switches the current language (the code must exist).
 func SetLanguage(code string) error {
     mu.Lock()
     defer mu.Unlock()
     if _, ok := dicts[code]; !ok {
-        return fmt.Errorf("i18n: неизвестный язык %q", code)
+        return fmt.Errorf("i18n: unknown language %q", code)
     }
     cur = code
     return nil
 }
 
-// Current — код текущего языка.
+// Current returns the current language code.
 func Current() string {
     mu.RLock()
     defer mu.RUnlock()
     return cur
 }
 
-// Languages — список доступных языков, отсортированный по самоназванию.
+// Languages returns the available languages sorted by endonym.
 func Languages() []Language {
     mu.RLock()
     defer mu.RUnlock()
@@ -134,8 +140,9 @@ func Languages() []Language {
     return out
 }
 
-// T — перевод ключа: текущий язык → эталонный → сам ключ (пропуски видны сразу).
-// Плейсхолдеры {0}, {1}… замещаются соответствующими args.
+// T translates a key: current language -> reference -> the key itself
+// (gaps are immediately visible). Placeholders {0}, {1}… are replaced with
+// the corresponding args.
 func T(key string, args ...any) string {
     mu.RLock()
     c, fb := dicts[cur], dicts[fallbackLang]
@@ -153,7 +160,8 @@ func T(key string, args ...any) string {
     return s
 }
 
-// Dict — полный словарь текущего языка, дополненный эталонным (для фронтенда).
+// Dict returns the full dictionary of the current language, merged with the
+// reference (for the frontend).
 func Dict() map[string]string {
     mu.RLock()
     defer mu.RUnlock()
