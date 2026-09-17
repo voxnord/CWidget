@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"log"
 	"time"
 
 	"github.com/voxnord/cwidget/rates"
@@ -27,10 +28,12 @@ func (a *App) ManualRefresh() {
 // counter and any pending retry are reset.
 func (a *App) BackgroundRefresh(manual bool) {
     if !a.busy.CompareAndSwap(false, true) {
+        log.Printf("[rates] refresh skipped: another one is in flight (manual=%v)", manual)
         return // debounce: another attempt is already in flight
     }
     defer a.busy.Store(false)
 
+    log.Printf("[rates] refresh started (manual=%v)", manual)
     a.emitBusy(true)
     if a.trayB != nil {
         a.trayB.SetBusy(true)
@@ -65,6 +68,7 @@ func (a *App) scheduleRetry() {
     if d > retryMaxDelay {
         d = retryMaxDelay
     }
+    log.Printf("[rates] full failure #%d — retry scheduled in %s", n, d)
     a.retryMu.Lock()
     if a.retryTimer != nil {
         a.retryTimer.Stop()
@@ -119,6 +123,7 @@ func (a *App) publish(tbl *rates.Table, err error) {
     }
     if err != nil {
         a.stale.Store(true)
+        log.Printf("[rates] refresh failed: %v", err)
         runtime.EventsEmit(a.ctx, "rates:error", err.Error())
         if a.trayB != nil {
             a.trayB.NotifyFailure(err.Error())
@@ -134,6 +139,8 @@ func (a *App) publish(tbl *rates.Table, err error) {
         Provider: preferred,
         Fallback: isFallback(tbl, preferred),
     }
+    log.Printf("[rates] refreshed from %q (fallback=%v, quotes=%s, at=%s)",
+        tbl.Source, payload.Fallback, tbl.QuoteDate, tbl.FetchedAt.Local().Format("15:04:05"))
     runtime.EventsEmit(a.ctx, "rates:update", payload)
     if a.trayB != nil {
         a.trayB.SetUpdatedLabel(tbl.FetchedAt)

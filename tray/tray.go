@@ -2,6 +2,7 @@
 package tray
 
 import (
+	"log"
 	"runtime"
 	"sync"
 	"time"
@@ -36,8 +37,8 @@ type Tray struct {
     langItems map[string]*systray.MenuItem
 
     mu            sync.RWMutex // RWMutex: applyTooltip reads under RLock, writers use Lock
-    lastUpdate    time.Time    // moment of the last successful refresh
-    cooldownUntil time.Time    // until when the refresh item is blocked
+    lastUpdate    time.Time     // moment of the last successful refresh
+    cooldownUntil time.Time     // until when the refresh item is blocked
     cooldownStop  chan struct{} // cancels the current countdown
 
     degPref, degAct string // degraded: keys of the selected and the actual provider ("" = none)
@@ -61,24 +62,30 @@ func (t *Tray) onReady() {
     }
     systray.SetTooltip(i18n.T("tray.tooltip"))
 
-    // Left click — open the converter window, do NOT show the menu
-    // (ShowMenu is not called). Works on Windows/macOS. On Linux the
-    // AppIndicator protocol does not report the click type in most DEs —
-    // the menu will open there regardless; the "Open" menu item keeps the
-    // functionality.
+    // CRITICAL RULE: never run application logic synchronously inside these
+    // handlers. The energye fork invokes click callbacks on the tray
+    // message-loop thread. A blocking call there (cross-thread window
+    // operations in Wails, disk/registry I/O) wedges the loop: the icon stays
+    // visible but stops responding to ANY click, including Quit — the process
+    // can then only be killed via Task Manager. Dispatching to a goroutine
+    // keeps the loop pumping forever.
     systray.SetOnClick(func(_ systray.IMenu) {
+        log.Printf("[tray] left click -> show request")
         if t.hooks.ShowWidget != nil {
-            t.hooks.ShowWidget()
+            go t.hooks.ShowWidget()
         }
     })
-    // Right click — context menu.
+    // Right click — context menu. ShowMenu MUST stay on the tray thread
+    // (TrackPopupMenu runs its modal loop there), so it is called directly.
     systray.SetOnRClick(func(menu systray.IMenu) {
+        log.Printf("[tray] right click -> menu")
         menu.ShowMenu()
     })
     // Double click — the window as well.
     systray.SetOnDClick(func(_ systray.IMenu) {
+        log.Printf("[tray] double click -> show request")
         if t.hooks.ShowWidget != nil {
-            t.hooks.ShowWidget()
+            go t.hooks.ShowWidget()
         }
     })
 

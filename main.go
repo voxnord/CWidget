@@ -43,6 +43,18 @@ func main() {
         log.Fatalf("config: %v", err)
     }
 
+    // Flight recorder: a log file next to the config, truncated on every
+    // start. Always on — the autostart scenario needs a post-mortem without
+    // env vars, and the volume is negligible (a few lines per refresh/show).
+    if d, err := config.Dir(); err == nil {
+        if f, err := os.OpenFile(filepath.Join(d, "cwidget.log"),
+            os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600); err == nil {
+            defer f.Close()
+            log.SetOutput(f)
+        }
+    }
+    log.SetFlags(log.Ldate | log.Ltime | log.Lmicroseconds)
+
     // i18n: load dictionaries BEFORE creating the tray (it must speak the
     // configured language from the very start), then normalize the language
     // stored in the config.
@@ -58,6 +70,9 @@ func main() {
     if err := i18n.SetLanguage(cfg.Language); err != nil {
         log.Fatalf("i18n: %v", err)
     }
+
+    log.Printf("[start] CWidget v%s | provider=%s | lang=%s | theme=%s",
+        app.Version, cfg.Provider, cfg.Language, cfg.Theme)
 
     httpc := &http.Client{Timeout: 15 * time.Second}
 
@@ -139,6 +154,7 @@ func main() {
             popup.LockResize(winTitle)
             popup.MoveNearTray(winTitle)
             popup.RoundCorners(winTitle)
+            log.Printf("[start] window created and pre-positioned")
         },
         // Translucency + transparency for the rounded corners; fixed webview profile.
         Windows: &windows.Options{
