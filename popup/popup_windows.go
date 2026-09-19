@@ -57,12 +57,12 @@ const (
     // automatically because we compute from the physical pixels of
     // GetWindowRect).
     //
-    // IMPORTANT (anti-jaggies on Win10): the region is slightly SMALLER than
-    // the CSS radius (13 vs 14 in style.css). The hard clipping edge — a GDI
-    // region is always 1-bit, no anti-aliasing — then falls exactly on the
-    // dark hairline drawn in CSS (body box-shadow inset), and the staircase
-    // pixels become practically invisible. To restore the previous look, set
-    // 14.0 and remove the body box-shadow.
+    // The region is deliberately SMALLER than the CSS radius (13 vs 14 in
+    // style.css), which makes it a strict superset of the painted rounded
+    // area: the hard 1-bit GDI cut passes only through fully transparent
+    // pixels and is never seen. The visible edge is the browser-antialiased
+    // CSS arc on #app; this region is a pure safety net (e.g. against a
+    // frame flash before the webview paints).
     cornerNum = 13.0
     cornerDen = 380.0
 )
