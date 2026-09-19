@@ -18,8 +18,13 @@ var showMu sync.Mutex
 // ShowMode is the single presentation entry point: size per mode, position
 // near the tray, corner rounding for the actual size, focus. Every step is
 // logged — if the window ever fails to appear, the log shows exactly which
-// step hung.
+// step hung. Panics are shielded: the call can come from a tray goroutine,
+// where an uncaught panic would kill the whole process.
 func (a *App) ShowMode(mode string) {
+    Safe("window.ShowMode("+mode+")", func() { a.showMode(mode) })
+}
+
+func (a *App) showMode(mode string) {
     if a.ctx == nil {
         return
     }

@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"log"
+	"runtime/debug"
 	"time"
 
 	"github.com/voxnord/cwidget/rates"
@@ -23,15 +24,32 @@ func (a *App) ManualRefresh() {
 
 // BackgroundRefresh performs one refresh. manual=true -> after completion a
 // one-minute cooldown is armed (tray + window button). Automatic updates
-// (ticker, retry) never arm the cooldown. After a complete failure (no
-// provider answered) a backoff retry is scheduled; after success the failure
-// counter and any pending retry are reset.
+// (ticker, retry, warm-up) never arm the cooldown. After a complete failure
+// (no provider answered) a backoff retry is scheduled; after success the
+// failure counter and any pending retry are reset.
+//
+// Panic shield: this runs on foreign goroutines (ticker, retry timer, tray).
+// The busy-cleanup is a defer too — deferred funcs run LIFO, so on a panic
+// the tray/button get un-stuck BEFORE the recover logs the crash. Without
+// this, a single panic would leave the UI in "Updating…" forever or kill
+// the whole process.
 func (a *App) BackgroundRefresh(manual bool) {
+    defer func() {
+        if r := recover(); r != nil {
+            log.Printf("[panic] refresh(manual=%v): %v\n%s", manual, r, debug.Stack())
+        }
+    }()
+
     if !a.busy.CompareAndSwap(false, true) {
         log.Printf("[rates] refresh skipped: another one is in flight (manual=%v)", manual)
         return // debounce: another attempt is already in flight
     }
-    defer a.busy.Store(false)
+    defer func() {
+        if a.trayB != nil {
+            a.trayB.SetBusy(false)
+        }
+        a.emitBusy(false)
+    }()
 
     log.Printf("[rates] refresh started (manual=%v)", manual)
     a.emitBusy(true)
@@ -40,10 +58,6 @@ func (a *App) BackgroundRefresh(manual bool) {
     }
     tbl, err := a.ratesM.TryRefresh(context.Background())
     a.publish(tbl, err)
-    if a.trayB != nil {
-        a.trayB.SetBusy(false)
-    }
-    a.emitBusy(false)
 
     if err != nil {
         a.scheduleRetry() // network/API is down — come back sooner than the ticker
@@ -88,6 +102,8 @@ func (a *App) cancelRetry() {
 }
 
 // BackgroundRefreshFalse is an adapter for time.AfterFunc (no cooldown).
+// BackgroundRefresh has its own panic shield, so a panic in the timer
+// goroutine cannot kill the process.
 func (a *App) BackgroundRefreshFalse() { a.BackgroundRefresh(false) }
 
 func (a *App) emitBusy(b bool) {

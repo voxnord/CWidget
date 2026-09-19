@@ -38,22 +38,23 @@ var iconPNG []byte
 const winTitle = "cw-floating-converter"
 
 func main() {
+    // Flight recorder: set up BEFORE anything that can fail. Appends across
+    // launches (a post-mortem of an idle-time failure needs the previous
+    // session), capped in size (see app.NewCapWriter).
+    var logCloser func()
+    if d, err := config.Dir(); err == nil {
+        if w, err := app.NewCapWriter(filepath.Join(d, "cwidget.log")); err == nil {
+            log.SetOutput(w)
+            logCloser = func() { w.Close() }
+            defer logCloser()
+        }
+    }
+    log.SetFlags(log.Ldate | log.Ltime | log.Lmicroseconds)
+
     cfg, err := config.Load()
     if err != nil {
         log.Fatalf("config: %v", err)
     }
-
-    // Flight recorder: a log file next to the config, truncated on every
-    // start. Always on — the autostart scenario needs a post-mortem without
-    // env vars, and the volume is negligible (a few lines per refresh/show).
-    if d, err := config.Dir(); err == nil {
-        if f, err := os.OpenFile(filepath.Join(d, "cwidget.log"),
-            os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600); err == nil {
-            defer f.Close()
-            log.SetOutput(f)
-        }
-    }
-    log.SetFlags(log.Ldate | log.Ltime | log.Lmicroseconds)
 
     // i18n: load dictionaries BEFORE creating the tray (it must speak the
     // configured language from the very start), then normalize the language
@@ -71,7 +72,7 @@ func main() {
         log.Fatalf("i18n: %v", err)
     }
 
-    log.Printf("[start] CWidget v%s | provider=%s | lang=%s | theme=%s",
+    log.Printf("[start] ===== launch: CWidget v%s | provider=%s | lang=%s | theme=%s =====",
         app.Version, cfg.Provider, cfg.Language, cfg.Theme)
 
     httpc := &http.Client{Timeout: 15 * time.Second}
@@ -121,12 +122,22 @@ func main() {
 
     appCore := app.New(cfg, manager, nil)
     hooks := tray.Hooks{
-        ShowWidget:      appCore.ShowWidget,
-        OpenSettings:    appCore.OpenSettingsView,
-        Refresh:         appCore.ManualRefresh,
-        ToggleAutoStart: func(enable bool) { _ = appCore.SetAutoStart(enable) },
-        SetLanguage:     func(code string) { _ = appCore.SetLanguage(code) },
-        Quit:            appCore.Quit,
+        ShowWidget:   appCore.ShowWidget,
+        OpenSettings: appCore.OpenSettingsView,
+        Refresh:      appCore.ManualRefresh,
+        ToggleAutoStart: func(enable bool) {
+            // Errors were silently discarded here before — a dead checkbox
+            // click left no trace at all.
+            if err := appCore.SetAutoStart(enable); err != nil {
+                log.Printf("[tray] autostart toggle failed (enable=%v): %v", enable, err)
+            }
+        },
+        SetLanguage: func(code string) {
+            if err := appCore.SetLanguage(code); err != nil {
+                log.Printf("[tray] language switch to %q failed: %v", code, err)
+            }
+        },
+        Quit: appCore.Quit,
     }
     trayCtl := tray.New(iconICO, iconPNG, hooks)
     appCore.SetTray(trayCtl)
@@ -149,6 +160,12 @@ func main() {
         AssetServer: &assetserver.Options{Assets: assets},
         OnStartup:     appCore.Startup,
         OnBeforeClose: appCore.BeforeClose, // closing the window = hide
+        OnShutdown: func(_ context.Context) {
+            log.Printf("[start] shutdown")
+            if logCloser != nil {
+                logCloser()
+            }
+        },
         OnDomReady: func(_ context.Context) {
             popup.RemoveFromTaskbar(winTitle)
             popup.LockResize(winTitle)

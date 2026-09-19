@@ -12,7 +12,9 @@ func (a *App) startTicker() {
     }
     a.stopCh = make(chan struct{})
     ch := a.stopCh
-    go func() {
+    // Panic shield: an uncaught panic here would end this goroutine —
+    // automatic refresh would die silently for the rest of the process life.
+    go Safe("ticker", func() {
         for {
             d := time.Duration(a.intervalMin()) * time.Minute
             t := time.NewTimer(d)
@@ -24,7 +26,7 @@ func (a *App) startTicker() {
                 a.BackgroundRefresh(false) // automatic refresh, no cooldown
             }
         }
-    }()
+    })
 }
 
 func (a *App) stopTicker() {

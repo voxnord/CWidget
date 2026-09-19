@@ -51,7 +51,28 @@ window.addEventListener("focus", () => armHideGuard(300));
 /* Window presentation goes through the backend (ShowMode): it sizes the
  * window per mode, places it near the tray and takes focus. */
 function showMode(mode) {
-  try { window.go.app.App.ShowMode(mode); } catch (e) { console.error(e); }
+  try { window.go.app.App.ShowMode(mode); } catch (e) { reportToLog("error", "ShowMode failed: " + (e?.stack ?? e)) }
+}
+
+/* ------------------- frontend error bridge -------------------------------
+ * A production build has no DevTools console: without this bridge a JS
+ * failure leaves no trace at all. Errors are forwarded to the backend log
+ * (window.onerror + unhandledrejection), capped per session to survive a
+ * pathological error loop. */
+let feLogCount = 0;
+function reportToLog(level, msg) {
+  if (feLogCount++ > 60) return;
+  try { window.go.app.App.LogFrontend(level, String(msg).slice(0, 1000)); } catch {}
+}
+window.addEventListener("error", e =>
+  reportToLog("error", `${e.message} @ ${e.filename}:${e.lineno}:${e.colno}`));
+window.addEventListener("unhandledrejection", e =>
+  reportToLog("error", "unhandled rejection: " + (e.reason?.stack ?? e.reason)));
+
+/* Log + surface an action error (used instead of a bare alert). */
+function showError(e) {
+  reportToLog("error", "action failed: " + (e?.stack ?? e));
+  alert(tErr(e));
 }
 
 /* --------------------------------- i18n ---------------------------------- */
@@ -670,7 +691,7 @@ for (const id of ["set-left", "set-right", "set-interval", "set-provider", "set-
   try {
     await applyPending();
     showToast(t("toast.saved"));
-  } catch (e) { alert(tErr(e)); }
+  } catch (e) { showError(e); }
 });
 
 /* Confirmation dialog */
@@ -681,7 +702,7 @@ for (const id of ["set-left", "set-right", "set-interval", "set-provider", "set-
     closeConfirm();
     showToast(t("toast.applied"));
     if (ctx === "back") showMode("main");
-  } catch (e) { alert(tErr(e)); } // a validation error keeps the dialog open
+  } catch (e) { showError(e); } // a validation error keeps the dialog open
 });
  $("confirm-no").addEventListener("click", () => {
   const ctx = confirmCtx;
@@ -756,5 +777,8 @@ document.querySelectorAll(".tab").forEach(btn => btn.addEventListener("click", (
     setRefreshBusy(false);
     startCooldownUI(st.cooldown_sec | 0); // the app was restarted mid-cooldown
     setMode("main"); // the window stays hidden until a tray click
-  } catch (e) { console.error("init:", e); }
+  } catch (e) { 
+    reportToLog("error", "init failed: " + (e?.stack ?? e));
+    console.error("init:", e);  
+  }
 })();

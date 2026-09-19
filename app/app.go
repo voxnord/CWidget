@@ -1,11 +1,13 @@
 // Package app wires the Wails lifecycle, the tray, the rates manager and the
 // frontend bindings together. Methods are split across files by responsibility:
 // window.go — window presentation, refresh.go — rates updates and cooldowns,
-// settings.go — the frontend-facing API, ticker.go — the background timer.
+// settings.go — the frontend-facing API, ticker.go — the background timer,
+// log.go — the panic shield and the log-file writer.
 package app
 
 import (
 	"context"
+	"log"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -111,4 +113,14 @@ func (a *App) BeforeClose(ctx context.Context) bool {
     }
     runtime.WindowHide(ctx)
     return true
+}
+
+/* ------------------------------ frontend log ----------------------------- */
+
+// LogFrontend records a message from the JS side into the same log file.
+// A production build has no DevTools console, so without this bridge a
+// frontend failure (window.onerror, unhandledrejection) would leave no trace
+// at all. The frontend caps the number of messages per session.
+func (a *App) LogFrontend(level, msg string) {
+    log.Printf("[frontend:%s] %s", level, msg)
 }
