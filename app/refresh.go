@@ -13,8 +13,9 @@ import (
 /* ------------------------------ rates updates ---------------------------- */
 
 const (
-    retryBaseDelay = 30 * time.Second // first retry after a complete failure
-    retryMaxDelay  = 10 * time.Minute // backoff cap
+    retryBaseDelay  = 30 * time.Second  // first retry after a complete failure
+    retryMaxDelay   = 10 * time.Minute  // backoff cap
+    refreshHardLimit = 45 * time.Second // watchdog: force-release the busy flag
 )
 
 // ManualRefresh is the user-triggered refresh (tray menu or the window button).
@@ -28,11 +29,12 @@ func (a *App) ManualRefresh() {
 // (no provider answered) a backoff retry is scheduled; after success the
 // failure counter and any pending retry are reset.
 //
-// Panic shield: this runs on foreign goroutines (ticker, retry timer, tray).
-// The busy-cleanup is a defer too — deferred funcs run LIFO, so on a panic
-// the tray/button get un-stuck BEFORE the recover logs the crash. Without
-// this, a single panic would leave the UI in "Updating…" forever or kill
-// the whole process.
+// Two shields make a permanently wedged state impossible:
+//   - the busy flag is released through CAS from BOTH the normal path and
+//     the watchdog — exactly one of them wins, so a hung refresh cannot
+//     block the next one forever (it used to wedge ALL later refreshes
+//     until a process restart);
+//   - panics are contained and logged.
 func (a *App) BackgroundRefresh(manual bool) {
     defer func() {
         if r := recover(); r != nil {
@@ -44,11 +46,30 @@ func (a *App) BackgroundRefresh(manual bool) {
         log.Printf("[rates] refresh skipped: another one is in flight (manual=%v)", manual)
         return // debounce: another attempt is already in flight
     }
-    defer func() {
-        if a.trayB != nil {
-            a.trayB.SetBusy(false)
+
+    // Watchdog: if this refresh exceeds the hard limit (a stalled network
+    // call, a wedged Wails/tray call), release the busy state so the app
+    // recovers on its own. On the normal path the flag is already false by
+    // the time this fires, so the CAS fails and the watchdog is a no-op.
+    time.AfterFunc(refreshHardLimit, func() {
+        if a.busy.CompareAndSwap(true, false) {
+            log.Printf("[rates] WATCHDOG: refresh exceeded %s — busy state force-released", refreshHardLimit)
+            if a.trayB != nil {
+                a.trayB.SetBusy(false)
+            }
+            a.emitBusy(false)
         }
-        a.emitBusy(false)
+    })
+
+    // Normal-path cleanup: release the flag only if we still own it (the
+    // watchdog may have taken over), then unstick the UI.
+    defer func() {
+        if a.busy.CompareAndSwap(true, false) {
+            if a.trayB != nil {
+                a.trayB.SetBusy(false)
+            }
+            a.emitBusy(false)
+        }
     }()
 
     log.Printf("[rates] refresh started (manual=%v)", manual)

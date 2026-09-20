@@ -8,3 +8,7 @@ import "github.com/voxnord/cwidget/autostart"
 func autostartEnabled() bool  { return autostart.Enabled() }
 func autostartEnable() error  { return autostart.Enable() }
 func autostartDisable() error { return autostart.Disable() }
+
+// AutoStartState exposes the actual OS state to the tray hooks: the context
+// menu seeds its checkbox from it at build time.
+func (a *App) AutoStartState() bool { return autostartEnabled() }

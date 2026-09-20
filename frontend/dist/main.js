@@ -32,10 +32,10 @@ let saved = null;
 let confirmCtx = null;
 
 /* ------- Popup behavior: hide on focus loss (with an anti-race guard) -------
- * Problem solved: right after clicking a tray menu item, Windows briefly
- * returns focus to the taskbar — a naive blur handler would hide the window
- * a split second after showing it. Solution: a grace period after show/focus
- * plus a hasFocus() re-check before hiding. */
+ * Right after clicking a tray menu item, Windows briefly returns focus to
+ * the taskbar — a naive blur handler would hide the window a split second
+ * after showing it. Solution: a grace period after show/focus plus a
+ * hasFocus() re-check before hiding. */
 let hideGuardUntil = 0;
 const armHideGuard = (ms = 700) => { hideGuardUntil = Date.now() + ms; };
 
@@ -51,7 +51,7 @@ window.addEventListener("focus", () => armHideGuard(300));
 /* Window presentation goes through the backend (ShowMode): it sizes the
  * window per mode, places it near the tray and takes focus. */
 function showMode(mode) {
-  try { window.go.app.App.ShowMode(mode); } catch (e) { reportToLog("error", "ShowMode failed: " + (e?.stack ?? e)) }
+  try { window.go.app.App.ShowMode(mode); } catch (e) { reportToLog("error", "ShowMode failed: " + (e?.stack ?? e)); }
 }
 
 /* ------------------- frontend error bridge -------------------------------
@@ -140,7 +140,8 @@ function applyDict(dict) {
   } else {
     applyUpdate({}); // redraws the badge (upd./as of), rate lines, etc.
   }
-  updateFallbackUI(); // the warning tooltip in the new language
+  updateFallbackUI();       // the warning tooltip in the new language
+  refreshProviderStatuses(); // statuses must follow the language immediately
 }
 
 function applyTheme(th) {
@@ -173,8 +174,7 @@ function fmtQuoteDate(iso) { // "2026-09-10" -> "10.09"
  * is anchored to the number of digits to its left, so typing in the middle
  * of a number never jumps to the end. Backspace right after a group
  * separator deletes the DIGIT (not the separator), otherwise the separator
- * would "resurrect" on re-grouping and the digit could not be erased with
- * one keystroke; Delete right before a separator works symmetrically. */
+ * would "resurrect" on re-grouping; Delete works symmetrically. */
 
 function cleanAmountString(s) {
   s = s.replace(/[^\d.,]/g, "").replace(/\./g, ","); // digits and separators only
@@ -273,9 +273,7 @@ function setArr(el, dir) {
 
 /* Pick an available code for the automatic pair replacement in the MAIN
  * window. STRICT guarantee: the result exists in names and is NOT equal to
- * taken. Returns "" when there are no candidates (the caller decides).
- * History: the last branch used to be able to return pref === taken, both
- * selects ended up with the same code and the backend answered err.same_pair. */
+ * taken. Returns "" when there are no candidates (the caller decides). */
 function codesFallback(pref, names, taken) {
   names = names ?? {};
   const ok = c => c && c !== taken;
@@ -559,10 +557,8 @@ function revertPending() {
 }
 
 /* Fill the settings "from scratch" (no unsaved edits). The saved pair is
- * shown AS IS, with NO automatic replacement by "available" codes: if the
- * current source has no RUB/KZT (a fallback is answering), the codes stay in
- * the lists without a name — "(KZT)". That is honest: the settings reflect
- * the config, not momentary network availability. */
+ * shown AS IS, with NO automatic replacement by "available" codes: the
+ * settings reflect the config, not momentary network availability. */
 async function populateSettings() {
   const st = await window.go.app.App.GetInitState();
   saved = snapshotFromState(st);
@@ -643,7 +639,7 @@ async function refreshProviderStatuses() {
   try {
     const st = await window.go.app.App.GetInitState();
     renderProviderStatuses(st.provider_statuses);
-  } catch (e) { console.error(e); }
+  } catch (e) { reportToLog("error", "refreshProviderStatuses failed: " + (e?.stack ?? e)); }
 }
 
 /* ------------------------------- UI events -------------------------------- */
@@ -777,8 +773,8 @@ document.querySelectorAll(".tab").forEach(btn => btn.addEventListener("click", (
     setRefreshBusy(false);
     startCooldownUI(st.cooldown_sec | 0); // the app was restarted mid-cooldown
     setMode("main"); // the window stays hidden until a tray click
-  } catch (e) { 
+  } catch (e) {
     reportToLog("error", "init failed: " + (e?.stack ?? e));
-    console.error("init:", e);  
+    console.error("init:", e);
   }
 })();

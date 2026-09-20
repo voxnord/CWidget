@@ -19,8 +19,14 @@ type Hooks struct {
     OpenSettings    func()
     Refresh         func()
     ToggleAutoStart func(enable bool)
-    SetLanguage     func(code string)
-    Quit            func()
+    // GetAutoStart returns the ACTUAL autostart state (the OS is the source
+    // of truth). It is polled when the menu is built, so the checkbox is in
+    // sync from the very first launch — without it the tray kept its local
+    // autoOn=false and showed the item unchecked even when autostart was on
+    // (the first click then "fixed" the state by accident).
+    GetAutoStart func() bool
+    SetLanguage  func(code string)
+    Quit         func()
 }
 
 type Tray struct {
@@ -37,9 +43,9 @@ type Tray struct {
     mLang     *systray.MenuItem
     langItems map[string]*systray.MenuItem
 
-    mu            sync.RWMutex // RWMutex: applyTooltip reads under RLock, writers use Lock
-    lastUpdate    time.Time    // moment of the last successful refresh
-    cooldownUntil time.Time    // until when the refresh item is blocked
+    mu            sync.RWMutex  // RWMutex: applyTooltip reads under RLock, writers use Lock
+    lastUpdate    time.Time     // moment of the last successful refresh
+    cooldownUntil time.Time     // until when the refresh item is blocked
     cooldownStop  chan struct{} // cancels the current countdown
 
     degPref, degAct string // degraded: keys of the selected and the actual provider ("" = none)
@@ -107,10 +113,18 @@ func (t *Tray) onReady() {
         }
     })
 
+    // Seed the checkbox from the ACTUAL state (the OS), not from a local
+    // assumption — this is what keeps the tray in sync with the settings
+    // toggle without any user interaction.
+    t.autoOn = false
+    if t.hooks.GetAutoStart != nil {
+        t.autoOn = t.hooks.GetAutoStart()
+    }
+
     t.mOpen = systray.AddMenuItem(i18n.T("tray.open"), i18n.T("tray.open.tip"))
     t.mRefresh = systray.AddMenuItem(t.refreshTitle(), i18n.T("tray.refresh.tip"))
     systray.AddSeparator()
-    t.mAuto = systray.AddMenuItemCheckbox(i18n.T("tray.autostart"), i18n.T("tray.autostart.tip"), false)
+    t.mAuto = systray.AddMenuItemCheckbox(i18n.T("tray.autostart"), i18n.T("tray.autostart.tip"), t.autoOn)
     t.mSettings = systray.AddMenuItem(i18n.T("tray.settings"), i18n.T("tray.settings.tip"))
 
     // Language submenu: the parent item is a regular menu item, language

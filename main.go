@@ -51,6 +51,12 @@ func main() {
     }
     log.SetFlags(log.Ldate | log.Ltime | log.Lmicroseconds)
 
+    // Single-instance guard: a second process exits here, before creating
+    // any tray icon or window.
+    if !acquireSingleInstance() {
+        return
+    }
+
     cfg, err := config.Load()
     if err != nil {
         log.Fatalf("config: %v", err)
@@ -77,9 +83,7 @@ func main() {
 
     httpc := &http.Client{Timeout: 15 * time.Second}
 
-    // ---- Provider registry: the SINGLE place to plug in a new rates API.
-    // Add one entry here and the provider automatically appears in the
-    // settings list and in the failover chain. No other code changes needed.
+    // ---- Provider registry: the SINGLE place to plug in a new rates API. ----
     factory := map[string]func(*http.Client) rates.Provider{
         "cbr":         func(c *http.Client) rates.Provider { return rates.NewCBR(c) },
         "frankfurter": func(c *http.Client) rates.Provider { return rates.NewFrankfurter(c) },
@@ -126,12 +130,14 @@ func main() {
         OpenSettings: appCore.OpenSettingsView,
         Refresh:      appCore.ManualRefresh,
         ToggleAutoStart: func(enable bool) {
-            // Errors were silently discarded here before — a dead checkbox
-            // click left no trace at all.
             if err := appCore.SetAutoStart(enable); err != nil {
                 log.Printf("[tray] autostart toggle failed (enable=%v): %v", enable, err)
             }
         },
+        // The tray seeds its checkbox from the actual OS state at menu build
+        // time — keeps the context menu in sync with the settings toggle from
+        // the very first launch.
+        GetAutoStart: appCore.AutoStartState,
         SetLanguage: func(code string) {
             if err := appCore.SetLanguage(code); err != nil {
                 log.Printf("[tray] language switch to %q failed: %v", code, err)
