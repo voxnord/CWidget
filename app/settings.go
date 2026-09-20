@@ -68,8 +68,45 @@ func (a *App) SetProvider(key string) error {
     return nil
 }
 
-// SetTheme switches the theme ("dark" | "light"). Applied immediately: the
-// frontend receives theme:changed and toggles the class on <body>.
+// SetStayOpen toggles the "keep window open on focus loss" mode. Applied
+// immediately: the always-on-top state follows the mode while the window is
+// visible, and the frontend stops auto-hiding on blur (stayopen:changed).
+func (a *App) SetStayOpen(enable bool) error {
+    a.cfgMu.Lock()
+    a.cfg.StayOpen = enable
+    saveErr := config.Save(a.cfg)
+    stay := a.cfg.StayOpen
+    a.cfgMu.Unlock()
+    if saveErr != nil {
+        return saveErr
+    }
+    if a.ctx != nil {
+        runtime.WindowSetAlwaysOnTop(a.ctx, stay)
+        runtime.EventsEmit(a.ctx, "stayopen:changed", enable)
+    }
+    return nil
+}
+
+// SetFavorites replaces the global favorites list. Favorites are
+// provider-agnostic ISO codes; availability filtering happens at render
+// time, so nothing here needs to know about providers.
+func (a *App) SetFavorites(codes []string) error {
+    a.cfgMu.Lock()
+    a.cfg.Favorites = config.NormalizeFavorites(codes)
+    saveErr := config.Save(a.cfg)
+    favs := append([]string(nil), a.cfg.Favorites...)
+    a.cfgMu.Unlock()
+    if saveErr != nil {
+        return saveErr
+    }
+    if a.ctx != nil {
+        runtime.EventsEmit(a.ctx, "favorites:changed", favs)
+    }
+    return nil
+}
+
+// SetTheme switches the theme ("dark" | "light"). Applied immediately:
+// the frontend receives theme:changed and toggles the class on <body>.
 func (a *App) SetTheme(theme string) error {
     theme = strings.ToLower(strings.TrimSpace(theme))
     if theme != "dark" && theme != "light" {
@@ -90,8 +127,7 @@ func (a *App) SetTheme(theme string) error {
 
 // SetLanguage switches the UI language. One call does everything: persists
 // the choice, swaps the dictionary, retranlsates the tray menu (Retranslate)
-// and broadcasts the dictionary to the frontend. Works from both the settings
-// and the tray language submenu.
+// and broadcasts the dictionary to the frontend.
 func (a *App) SetLanguage(lang string) error {
     lang = strings.ToLower(strings.TrimSpace(lang))
     if !i18n.Has(lang) {

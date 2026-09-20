@@ -52,3 +52,7 @@ func FocusWindow(title string) {
     }
     _ = exec.Command(wmctrl, "-a", title).Run()
 }
+
+// SetTopmost is a stub: always-on-top depends on the WM (can be added via
+// wmctrl -b add,above on X11 if needed).
+func SetTopmost(title string, enable bool) {}

@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width,initial-scale=1"/>
-  <title>Currency Converter</title>
+  <title>Конвертер валют</title>
   <link rel="stylesheet" href="/style.css"/>
 </head>
 <body>
@@ -18,6 +18,7 @@
       <div class="tools no-drag">
         <button id="btn-refresh" class="icon-btn" data-i18n-title="tray.refresh">⟳</button>
         <button id="btn-settings" class="icon-btn" data-i18n-title="settings.title">⚙</button>
+        <button id="btn-close" class="icon-btn" data-i18n-title="ui.close">✕</button>
       </div>
     </header>
 
@@ -31,11 +32,11 @@
       </div>
 
       <div class="cell">
-        <select id="sel-left" class="no-drag"></select>
+        <select id="sel-left" class="ccurrency no-drag"></select>
       </div>
       <button id="swap-cur" class="swap no-drag" data-i18n-title="ui.swap.currencies">⇄</button>
       <div class="cell">
-        <select id="sel-right" class="no-drag"></select>
+        <select id="sel-right" class="ccurrency no-drag"></select>
       </div>
 
       <div class="rateline right-gap">
@@ -55,73 +56,78 @@
   <section id="view-settings" hidden>
     <header class="topbar drag">
       <button id="btn-back" class="icon-btn no-drag" data-i18n-title="settings.back">‹</button>
-      <b class="ttl" data-i18n="settings.title">Settings</b>
+      <b class="ttl" data-i18n="settings.title">Настройки</b>
       <span style="flex:1"></span>
     </header>
 
     <nav class="tabs no-drag">
-      <button class="tab active" data-tab="basic" data-i18n="settings.tab.basic">General</button>
-      <button class="tab" data-tab="about" data-i18n="settings.tab.about">About</button>
+      <button class="tab active" data-tab="basic" data-i18n="settings.tab.basic">Основные</button>
+      <button class="tab" data-tab="about" data-i18n="settings.tab.about">О программе</button>
     </nav>
 
     <div id="tab-basic" class="tabpane">
-      <label class="lbl" data-i18n="settings.default_pair">Default pair</label>
+      <label class="lbl" data-i18n="settings.default_pair">Конвертировать по умолчанию</label>
       <div class="defpair">
-        <select id="set-left"></select>
+        <select id="set-left" class="ccurrency"></select>
         <span>→</span>
-        <select id="set-right"></select>
+        <select id="set-right" class="ccurrency"></select>
       </div>
 
-      <label class="lbl" for="set-provider" data-i18n="settings.provider">Rates provider</label>
+      <label class="lbl" for="set-provider" data-i18n="settings.provider">Источник курсов</label>
       <select id="set-provider"></select>
       <div id="provider-status" class="prov-status"></div>
 
-      <label class="lbl" for="set-interval" data-i18n="settings.interval">Refresh interval</label>
+      <label class="lbl" for="set-interval" data-i18n="settings.interval">Период обновления курса</label>
       <select id="set-interval">
-        <option value="15" data-i18n="interval.15">15 minutes</option>
-        <option value="30" data-i18n="interval.30">30 minutes</option>
-        <option value="60" selected data-i18n="interval.60">1 hour</option>
-        <option value="180" data-i18n="interval.180">3 hours</option>
-        <option value="360" data-i18n="interval.360">6 hours</option>
+        <option value="15" data-i18n="interval.15">15 минут</option>
+        <option value="30" data-i18n="interval.30">30 минут</option>
+        <option value="60" selected data-i18n="interval.60">1 час</option>
+        <option value="180" data-i18n="interval.180">3 часа</option>
+        <option value="360" data-i18n="interval.360">6 часов</option>
       </select>
 
-      <label class="lbl" for="set-theme" data-i18n="settings.theme">Theme</label>
+      <label class="lbl" for="set-theme" data-i18n="settings.theme">Тема оформления</label>
       <select id="set-theme">
-        <option value="dark" data-i18n="theme.dark">Dark</option>
-        <option value="light" data-i18n="theme.light">Light</option>
+        <option value="dark" data-i18n="theme.dark">Тёмная</option>
+        <option value="light" data-i18n="theme.light">Светлая</option>
       </select>
 
-      <label class="lbl" for="set-lang" data-i18n="settings.language">Language</label>
+      <label class="lbl" for="set-lang" data-i18n="settings.language">Язык</label>
       <select id="set-lang"></select>
 
       <div class="switchrow">
-        <span data-i18n="settings.autostart">Launch at system startup</span>
+        <span data-i18n="settings.autostart">Запускать при старте системы</span>
         <button id="set-autostart" class="toggle" role="switch" aria-checked="false"></button>
       </div>
 
-      <button id="btn-save" class="primary" data-i18n="settings.save">Save</button>
+      <div class="switchrow">
+        <span data-i18n="settings.stay_open">Не скрывать окно при клике мимо</span>
+        <button id="set-stayopen" class="toggle" role="switch" aria-checked="false"></button>
+      </div>
+
+      <button id="btn-save" class="primary" data-i18n="settings.save">Сохранить</button>
     </div>
 
     <div id="tab-about" class="tabpane" hidden>
-      <p class="about"><b><span data-i18n="about.name">Currency Converter</span></b> <span id="ver"></span> <span data-i18n="about.tagline">— виджет в трее.</span></p>
+      <p class="about"><b><span data-i18n="about.name">Конвертер валют</span></b> <span id="ver"></span> <span data-i18n="about.tagline">— виджет в трее.</span></p>
       <p class="about" data-i18n="about.sources"></p>
       <p class="about" data-i18n="about.stack"></p>
     </div>
 
-    <div id="toast" class="toast">Saved</div>
+    <div id="toast" class="toast">Сохранено</div>
   </section>
 </main>
 
-  <!-- ==================== CONFIRMATION DIALOG ====================
-       Lives inside the same webview: always on top of the widget window,
-       styled with the same theme variables. -->
+<!-- ==================== CONFIRMATION DIALOG ====================
+     Lives inside the same webview: always on top of the widget window,
+     styled with the same theme variables. -->
 <div id="confirm-overlay" class="confirm-overlay" hidden>
   <div class="confirm" role="dialog" aria-modal="true">
-    <p class="confirm-title" data-i18n="confirm.title">Apply changes?</p>
-    <p class="confirm-text" data-i18n="confirm.text">Settings have been changed. Save the new values?</p>
+    <p class="confirm-title" data-i18n="confirm.title">Применить изменения?</p>
+    <p class="confirm-text" data-i18n="confirm.text">Настройки были изменены. Сохранить новые значения?</p>
     <div class="confirm-actions">
-      <button id="confirm-yes" class="primary" data-i18n="confirm.yes">Yes</button>
-      <button id="confirm-no" class="ghost" data-i18n="confirm.no">No</button>
+      <button id="confirm-yes" class="primary" data-i18n="confirm.yes">Да</button>
+      <button id="confirm-no" class="ghost" data-i18n="confirm.no">Нет</button>
     </div>
   </div>
 </div>

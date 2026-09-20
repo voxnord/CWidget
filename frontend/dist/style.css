@@ -5,7 +5,7 @@
   --chip:#232630; --chip-txt:#aab1c5;
   --btn:#262a37; --btn-hover:#33384a;
   --knob:#8891a8; --toast:#262a37;
-  --win-bg:rgba(21,22,28,.97); /* glass knob: raise the alpha for a more solid window */
+  --win-bg:rgba(21,22,28,.97);
   --edge:rgba(0,0,0,.5);
   --edge-soft:rgba(0,0,0,.22);
   --warn:#f0b429;
@@ -25,13 +25,9 @@ body.light{
 /* Overrides display:flex of .tabpane — otherwise the tabs break. */
 [hidden]{display:none!important}
 
-/* The html/body canvas must stay FULLY transparent. CRITICAL: never move the
- * window background back to body — a non-transparent background on body
- * propagates to the CANVAS and paints the whole window as an unrounded
- * rectangle (border-radius on body never clips the propagated canvas
- * background). That exact bug produced the "outline floating inside the
- * window" and the translucent rim near the corners. The rounded chrome lives
- * on #app below. */
+/* The html/body canvas must stay FULLY transparent: a non-transparent
+ * background on body would propagate to the canvas and paint the whole
+ * window as an unrounded rectangle. The rounded chrome lives on #app. */
 html{background:transparent}
 html,body{height:100%}
 body{
@@ -39,17 +35,14 @@ body{
 }
 
 /* Window chrome: the rounded translucent surface everything is drawn on.
- * Its anti-aliased border-radius IS the visible window shape: the Win10 GDI
- * region (see popup_windows.go) is deliberately a slightly larger superset,
- * so the hard system cut passes only through transparent pixels and is never
- * seen; on Win11 the native DWM rounding is absorbed the same way. The inset
- * hairline therefore sits exactly on the visible edge on both OSes. */
+ * NOTE: overflow is intentionally NOT hidden here anymore — dropdown lists
+ * are rendered into <body> (fixed, above everything) and must be able to
+ * extend past the window edge, exactly like native OS comboboxes. */
 #app{
   position:relative;        /* anchors the absolutely positioned toast */
   width:100%;height:100%;
   border-radius:14px;
   background:var(--win-bg);
-  overflow:hidden;          /* children never paint outside the rounding */
   box-shadow:inset 0 0 0 1px var(--edge), inset 0 0 3px 1px var(--edge-soft);
 }
 
@@ -126,3 +119,25 @@ a{color:var(--accent)}
 .confirm-actions .primary{margin-top:0;flex:1}
 .ghost{flex:1;padding:8px;border:none;border-radius:8px;background:var(--btn);color:var(--txt);font-weight:600;cursor:pointer}
 .ghost:hover{background:var(--btn-hover)}
+
+/* ---- Custom currency dropdowns ----
+ * The list is rendered into <body> with position:fixed: it is NOT clipped by
+ * the window, it may extend past the bottom edge (like native comboboxes),
+ * and its own rounded corners are always fully visible. The native select
+ * stays hidden as the state holder. */
+.cwrap{position:relative;min-width:0}
+.defpair .cwrap{flex:1}
+.chidden{display:none!important} /* the native select keeps state, the custom widget draws */
+.cbtn{width:100%;background:var(--panel);border:1px solid var(--line);border-radius:8px;color:var(--txt);padding:6px 8px;outline:none;text-align:left;font-size:13px;cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.cbtn:hover{border-color:var(--accent)}
+.clist{position:fixed;z-index:1000;background:var(--panel);border:1px solid var(--line);border-radius:10px;box-shadow:0 10px 28px rgba(0,0,0,.45);display:none;flex-direction:column;overflow:hidden}
+.clist.open{display:flex}
+.csearch{margin:6px;background:var(--btn);border:1px solid var(--line);border-radius:6px;color:var(--txt);padding:4px 8px;outline:none;font-size:12px;flex:0 0 auto}
+.crows{overflow-y:auto}
+.crow{display:flex;align-items:center;justify-content:space-between;gap:6px;padding:5px 8px 5px 10px;cursor:pointer;font-size:12px}
+.crow:hover{background:var(--btn)}
+.crow.selected{color:var(--accent)}
+.cname{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.cstar{border:none;background:transparent;color:var(--dim);cursor:pointer;font-size:14px;line-height:1;padding:2px 4px;flex:0 0 auto}
+.cstar.on{color:var(--warn)}
+.cstar:hover{color:var(--txt)}

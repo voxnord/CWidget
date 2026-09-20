@@ -5,42 +5,38 @@ const $ = id => document.getElementById(id);
 /* Global UI state:
  * left/right  — ISO codes of the currently displayed pair;
  * amountSide  — which input is the source of truth ("left" | "right");
- *               only the opposite field is ever recalculated, so the field
- *               the user types in is never overwritten programmatically;
  * table/names — the current snapshot and the code->name dictionary of the
  *               provider that actually answered;
  * provider    — the key of the SELECTED provider (may differ from the one
  *               that answered — see fallback);
- * fallback    — true when the selected provider is down and data comes from
- *               a fallback source;
- * pairOverride — the original pair temporarily replaced because it is
- *               unavailable at the current source (main window only). */
+ * fallback    — data comes from a fallback source;
+ * favorites   — global favorite currency codes (provider-agnostic; codes
+ *               unavailable at the current provider are simply not shown);
+ * stayOpen    — keep the window open on focus loss (topmost while visible). */
 const S = {
   left: "RUB", right: "KZT",
   amountSide: "left",
   table: null, names: {},
-  dict: {},           // dictionary of the current language (sent by the backend)
-  err: false,         // "no connection" badge state
+  dict: {},
+  err: false,
   provider: "",
   fallback: false,
-  wasFallback: null,  // previous fallback value: transition detection for toasts
+  wasFallback: null,
   pairOverride: null,
+  favorites: [],
+  stayOpen: false,
 };
 
-/* Snapshot of the SAVED settings. null until the settings were opened. */
 let saved = null;
 let confirmCtx = null;
 
-/* ------- Popup behavior: hide on focus loss (with an anti-race guard) -------
- * Right after clicking a tray menu item, Windows briefly returns focus to
- * the taskbar — a naive blur handler would hide the window a split second
- * after showing it. Solution: a grace period after show/focus plus a
- * hasFocus() re-check before hiding. */
+/* ------- Popup behavior: hide on focus loss (with an anti-race guard) ------- */
 let hideGuardUntil = 0;
 const armHideGuard = (ms = 700) => { hideGuardUntil = Date.now() + ms; };
 
 window.addEventListener("blur", () => {
   setTimeout(() => {
+    if (S.stayOpen) return; // the user pinned the window — no auto-hide
     if (Date.now() < hideGuardUntil) return;
     if (document.hasFocus()) return;
     try { window.runtime.WindowHide(); } catch {}
@@ -48,17 +44,11 @@ window.addEventListener("blur", () => {
 });
 window.addEventListener("focus", () => armHideGuard(300));
 
-/* Window presentation goes through the backend (ShowMode): it sizes the
- * window per mode, places it near the tray and takes focus. */
 function showMode(mode) {
   try { window.go.app.App.ShowMode(mode); } catch (e) { reportToLog("error", "ShowMode failed: " + (e?.stack ?? e)); }
 }
 
-/* ------------------- frontend error bridge -------------------------------
- * A production build has no DevTools console: without this bridge a JS
- * failure leaves no trace at all. Errors are forwarded to the backend log
- * (window.onerror + unhandledrejection), capped per session to survive a
- * pathological error loop. */
+/* ------------------- frontend error bridge ------------------------------- */
 let feLogCount = 0;
 function reportToLog(level, msg) {
   if (feLogCount++ > 60) return;
@@ -69,7 +59,6 @@ window.addEventListener("error", e =>
 window.addEventListener("unhandledrejection", e =>
   reportToLog("error", "unhandled rejection: " + (e.reason?.stack ?? e.reason)));
 
-/* Log + surface an action error (used instead of a bare alert). */
 function showError(e) {
   reportToLog("error", "action failed: " + (e?.stack ?? e));
   alert(tErr(e));
@@ -82,15 +71,11 @@ function t(key, ...args) {
   args.forEach((a, i) => { s = s.replaceAll(`{${i}}`, String(a)); });
   return s;
 }
-/* Backend errors arrive as localization keys: "err.iso" or
- * "err.provider_unknown|<key>". */
 function tErr(e) {
   const parts = String(e).split("|");
   const s = t(parts[0], ...parts.slice(1));
   return s === parts[0] ? String(e) : s;
 }
-/* Provider label: dictionary translation by key, otherwise the canonical
- * name from the adapter. */
 function providerLabel(p) {
   const k = `provider.${p.key}`;
   const tr = t(k);
@@ -106,8 +91,6 @@ function preferredName() {
   const tr = t(k);
   return tr !== k ? tr : S.provider;
 }
-/* Degradation indicator: a warning mark near the source badge plus a dynamic
- * tooltip explaining where the data actually comes from. */
 function updateFallbackUI() {
   const warn = $("src-warn");
   warn.hidden = !S.fallback;
@@ -119,7 +102,6 @@ function updateFallbackUI() {
   }
   warn.title = tip;
 }
-/* Apply a dictionary to all marked elements, then redraw dynamic texts. */
 function applyDict(dict) {
   if (!dict) return;
   S.dict = dict;
@@ -127,21 +109,26 @@ function applyDict(dict) {
   document.querySelectorAll("[data-i18n-title]").forEach(el => { el.title = t(el.dataset.i18nTitle); });
   document.title = t("app.title");
 
-  // Provider options in the open settings select — rename in place.
   const provSel = $("set-provider");
   if (provSel) {
     for (const o of provSel.options) {
       o.textContent = providerLabel({ key: o.value, name: o.dataset.name ?? o.value });
     }
   }
+  // Dropdown chrome is rendered by us: search placeholders and star tooltips
+  // must follow the language immediately.
+  for (const sel of currencySelects) {
+    sel._cwidget.search.placeholder = t("ui.search");
+    renderDropdownList(sel);
+  }
 
   if (S.err) {
     $("upd-badge").textContent = t("rates.error");
   } else {
-    applyUpdate({}); // redraws the badge (upd./as of), rate lines, etc.
+    applyUpdate({});
   }
-  updateFallbackUI();       // the warning tooltip in the new language
-  refreshProviderStatuses(); // statuses must follow the language immediately
+  updateFallbackUI();
+  refreshProviderStatuses();
 }
 
 function applyTheme(th) {
@@ -159,39 +146,29 @@ function parseAmt(s) {
   const v = parseFloat(String(s).replace(/\s/g, "").replace(",", "."));
   return isFinite(v) ? v : NaN;
 }
-const BLANK = "\u2800"; // braille blank: keeps layout width, draws nothing
+const BLANK = "\u2800";
 
 function fmtTime(d) {
   return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
 }
-function fmtQuoteDate(iso) { // "2026-09-10" -> "10.09"
+function fmtQuoteDate(iso) {
   if (!iso || iso.length < 10) return null;
   return `${iso.slice(8, 10)}.${iso.slice(5, 7)}`;
 }
 
-/* ------------- amount inputs with live thousands grouping -----------------
- * The field is reformatted while typing: "24000,5" -> "24 000,5". The caret
- * is anchored to the number of digits to its left, so typing in the middle
- * of a number never jumps to the end. Backspace right after a group
- * separator deletes the DIGIT (not the separator), otherwise the separator
- * would "resurrect" on re-grouping; Delete works symmetrically. */
-
+/* ------------- amount inputs with live thousands grouping ----------------- */
 function cleanAmountString(s) {
-  s = s.replace(/[^\d.,]/g, "").replace(/\./g, ","); // digits and separators only
-  const c = s.indexOf(",");                          // at most one comma
+  s = s.replace(/[^\d.,]/g, "").replace(/\./g, ",");
+  const c = s.indexOf(",");
   if (c !== -1) s = s.slice(0, c + 1) + s.slice(c + 1).replace(/,/g, "");
   return s;
 }
-
 function groupThousands(s) {
   const c = s.indexOf(",");
   const intPart = c === -1 ? s : s.slice(0, c);
-  const frac = c === -1 ? "" : s.slice(c); // fraction as typed
+  const frac = c === -1 ? "" : s.slice(c);
   return intPart.replace(/\B(?=(\d{3})+(?!\d))/g, " ") + frac;
 }
-
-/* formatAmountInput(el, caretPos): caretPos is the caret offset in el.value
- * BEFORE the rewrite (on an input event — the current selectionStart). */
 function formatAmountInput(el, caretPos) {
   if (caretPos == null) caretPos = el.value.length;
   const raw = el.value;
@@ -221,24 +198,20 @@ function formatAmountInput(el, caretPos) {
   }
   el.setSelectionRange(newCaret, newCaret);
 }
-
 function amountKeydown(e) {
   if (e.key !== "Backspace" && e.key !== "Delete") return;
   const el = e.target;
   const s = el.selectionStart, en = el.selectionEnd;
-  if (s === null || s !== en) return; // a selection exists — native behavior is fine
+  if (s === null || s !== en) return;
 
   if (e.key === "Backspace") {
     if (s < 2 || el.value[s - 1] !== " ") return;
     e.preventDefault();
-    // remove the digit before the separator and the separator itself
     el.value = el.value.slice(0, s - 2) + el.value.slice(s - 1);
     formatAmountInput(el, s - 1);
     recalc();
     return;
   }
-
-  // Delete: caret right before a separator -> remove the digit after it
   if (el.value[s] !== " " || s + 1 >= el.value.length) return;
   e.preventDefault();
   el.value = el.value.slice(0, s) + el.value.slice(s + 2);
@@ -257,8 +230,6 @@ function pair(a, b) {
   if (f.has_prev && q.has_prev && q.prev) { prev = f.prev / q.prev; hasPrev = true; }
   return { cur, prev, hasPrev };
 }
-/* Trend direction: compare against yesterday's rate when the source provides
- * it; otherwise the blank symbol keeps the layout width. */
 function trendDir(calc) {
   if (!calc || !calc.hasPrev) return null;
   const eps = Math.max(Math.abs(calc.prev), Math.abs(calc.cur)) * 1e-7;
@@ -272,26 +243,22 @@ function setArr(el, dir) {
 }
 
 /* Pick an available code for the automatic pair replacement in the MAIN
- * window. STRICT guarantee: the result exists in names and is NOT equal to
- * taken. Returns "" when there are no candidates (the caller decides). */
+ * window. Preference order: the preferred code itself, then the user's
+ * favorites, then common USD/EUR/RUB, then anything else. STRICT guarantee:
+ * the result exists in names and is NOT equal to taken; "" when none. */
 function codesFallback(pref, names, taken) {
   names = names ?? {};
   const ok = c => c && c !== taken;
   if (pref && names[pref] && ok(pref)) return pref;
-  for (const c of ["USD", "EUR", "RUB"]) {
-    if (names[c] && ok(c)) return c;
-  }
+  for (const c of S.favorites) if (names[c] && ok(c)) return c;
+  for (const c of ["USD", "EUR", "RUB"]) if (names[c] && ok(c)) return c;
   const keys = Object.keys(names).sort((a, b) =>
     String(names[a]).localeCompare(String(names[b]), "ru"));
-  for (const c of keys) {
-    if (ok(c)) return c;
-  }
+  for (const c of keys) if (ok(c)) return c;
   return "";
 }
 
 /* -------------------------------- rendering ------------------------------- */
-/* recalc: ONLY the field the user is not typing in gets recalculated
- * (see S.amountSide). The source of truth is read from the field itself. */
 function recalc() {
   const leftEl = $("in-amount");
   const rightEl = $("out-result");
@@ -313,30 +280,28 @@ function recalc() {
   setArr($("arr-r"), trendDir(calcRL));
 }
 
-/* Bottom swap button: reverse the currency pair; the user's number stays in
- * its own field (and keeps its source-of-truth role). */
 function doSwap() {
   [S.left, S.right] = [S.right, S.left];
   $("sel-left").value = S.left;
   $("sel-right").value = S.right;
+  syncDropdown($("sel-left"));
+  syncDropdown($("sel-right"));
   recalc();
 }
 
-/* Top swap button: reverse the whole operation — values are exchanged
- * between the fields together with the currencies:
- * 100 RUB -> 525.3784 KZT  =>  525.3784 KZT -> 100 RUB. */
 function doSwapAll() {
   const v = parseAmt($("out-result").value);
   [S.left, S.right] = [S.right, S.left];
   $("sel-left").value = S.left;
   $("sel-right").value = S.right;
+  syncDropdown($("sel-left"));
+  syncDropdown($("sel-right"));
   if (!isNaN(v)) {
-    // toPrecision(10) strips float noise: 100.00000000000001 -> "100"
     const clean = String(parseFloat(v.toPrecision(10)));
     S.amountSide = "left";
     const el = $("in-amount");
     el.value = clean;
-    formatAmountInput(el); // immediately with thousands grouping
+    formatAmountInput(el);
   }
   recalc();
 }
@@ -353,6 +318,7 @@ function fillSelect(sel, value) {
     sel.appendChild(o);
   }
   sel.value = value;
+  syncDropdown(sel);
 }
 
 function applyUpdate(p) {
@@ -363,8 +329,6 @@ function applyUpdate(p) {
   const prevFallback = S.wasFallback;
   S.fallback = !!(p?.fallback);
   S.wasFallback = S.fallback;
-  /* Toast on state TRANSITION only — not on every refresh, not at startup,
-   * not on the applyUpdate({}) redraw after a language switch. */
   if (p?.table && prevFallback !== undefined && prevFallback !== S.fallback) {
     if (S.fallback) {
       showToast(t("toast.fallback.on", preferredName(), providerName(S.table)));
@@ -381,14 +345,9 @@ function applyUpdate(p) {
     badge.textContent = txt;
     badge.classList.remove("err");
   }
-  // The source badge is updated from the actual data — after a provider
-  // switch the new name arrives by itself, no dedicated code needed.
   $("src-badge").textContent = providerName(S.table);
 
-  /* Automatic pair replacement — MAIN WINDOW ONLY: the pair is unavailable
-   * at the source -> a temporary replacement (the original is remembered);
-   * the original becomes available again -> automatic return. The settings
-   * are never touched by this logic. */
+  /* Automatic pair replacement — MAIN WINDOW ONLY. */
   if (!pair(S.left, S.right) && Object.keys(S.names ?? {}).length) {
     if (!S.pairOverride) S.pairOverride = { left: S.left, right: S.right };
     const nl = codesFallback(S.left, S.names);
@@ -399,7 +358,7 @@ function applyUpdate(p) {
     S.right = S.pairOverride.right;
     S.pairOverride = null;
   }
-  updateFallbackUI(); // after the pair logic: the tooltip may mention the replacement
+  updateFallbackUI();
 
   fillSelect($("sel-left"), S.left);
   fillSelect($("sel-right"), S.right);
@@ -461,15 +420,12 @@ function setMode(mode) {
   $("view-main").hidden = mode === "settings";
   $("view-settings").hidden = mode === "main";
   if (mode === "main") {
+    closeDropdowns();
     closeConfirm();
     recalc();
   }
 }
 
-/* Refresh ONLY the currency labels in the open settings (fresh data arrived —
- * e.g. after a provider switch). Selected values are never touched: automatic
- * code replacement in the settings is forbidden (it used to be the source of
- * phantom dirty state and silent pair overwrites). */
 function refreshSettingsCurrencyLabels() {
   if ($("view-settings").hidden) return;
   if (!$("confirm-overlay").hidden) return;
@@ -493,8 +449,8 @@ function snapshotFromState(st) {
   };
 }
 
-/* Unconfirmed edits? The autostart toggle is NOT included: it applies
- * instantly and never marks the form dirty. */
+/* Confirmable fields only. The autostart and stay-open toggles apply
+ * instantly and never mark the form dirty. */
 function computeDirty() {
   if (!saved) return false;
   return (
@@ -517,15 +473,11 @@ function openConfirm(ctx) {
   confirmCtx = ctx;
   $("confirm-overlay").hidden = false;
 }
-
 function closeConfirm() {
   $("confirm-overlay").hidden = true;
   confirmCtx = null;
 }
 
-/* Apply everything selected (except autostart — it is instant). Exactly what
- * the controls show is saved — nothing is silently rewritten on the way to
- * the backend. */
 async function applyPending() {
   const base = $("set-left").value;
   const target = $("set-right").value;
@@ -545,7 +497,6 @@ async function applyPending() {
   updateDirtyUI();
 }
 
-/* Roll the controls back to the saved values (the "No" button). */
 function revertPending() {
   fillSelect($("set-left"), saved.base);
   fillSelect($("set-right"), saved.target);
@@ -556,42 +507,37 @@ function revertPending() {
   updateDirtyUI();
 }
 
-/* Fill the settings "from scratch" (no unsaved edits). The saved pair is
- * shown AS IS, with NO automatic replacement by "available" codes: the
- * settings reflect the config, not momentary network availability. */
 async function populateSettings() {
   const st = await window.go.app.App.GetInitState();
   saved = snapshotFromState(st);
   S.names = st.update.names ?? {};
+  S.favorites = st.config.favorites ?? [];
   fillSelect($("set-left"), saved.base);
   fillSelect($("set-right"), saved.target);
 
   $("set-interval").value = saved.interval;
   $("set-autostart").setAttribute("aria-checked", String(st.autostart_enabled));
+  $("set-stayopen").setAttribute("aria-checked", String(!!st.config.stay_open));
 
-  // The provider list is built from the backend registry — a newly
-  // registered provider appears here automatically, no extra code.
   const provSel = $("set-provider");
   provSel.innerHTML = "";
   for (const p of st.providers ?? []) {
     const o = document.createElement("option");
     o.value = p.key;
-    o.textContent = providerLabel(p); // translated with the current language dictionary
-    o.dataset.name = p.name;          // canonical name — for renaming on a language switch
+    o.textContent = providerLabel(p);
+    o.dataset.name = p.name;
     provSel.appendChild(o);
   }
   provSel.value = saved.provider;
 
   $("set-theme").value = saved.theme;
 
-  // The language list comes from the backend: a new locales/*.json appears
-  // here automatically.
   const langSel = $("set-lang");
   langSel.innerHTML = "";
   for (const l of st.languages ?? []) {
     const o = document.createElement("option");
     o.value = l.code;
-    o.textContent = l.name; // endonym — never translated
+    o.textContent = l.name;
     langSel.appendChild(o);
   }
   langSel.value = saved.lang;
@@ -606,8 +552,7 @@ async function openSettings() {
   showMode("settings");
 }
 
-/* The provider status line in the settings: available / unavailable (time)
- * / not checked yet. The full text of the last error is in the tooltip. */
+/* Provider status line (see tray.go / manager.go for the data source). */
 function renderProviderStatuses(list) {
   const el = $("provider-status");
   if (!el) return;
@@ -633,7 +578,6 @@ function renderProviderStatuses(list) {
   }
 }
 
-/* Refresh only the status line (settings open, an event arrived). */
 async function refreshProviderStatuses() {
   if ($("view-settings").hidden) return;
   try {
@@ -642,10 +586,186 @@ async function refreshProviderStatuses() {
   } catch (e) { reportToLog("error", "refreshProviderStatuses failed: " + (e?.stack ?? e)); }
 }
 
+/* --------------- favorites & custom currency dropdowns --------------------
+ * A native <select> cannot host buttons inside its options, so each currency
+ * select is enhanced: the select itself is hidden (it remains the state
+ * holder and keeps firing change events for all existing handlers), and a
+ * custom list is drawn on top — favorites duplicated at the top (the
+ * provider's own order below is untouched), a star per row, a search filter.
+ * Favorites are a GLOBAL list of ISO codes: provider-agnostic by design,
+ * unavailable codes are just not rendered for the current source. */
+const currencySelects = [];
+
+function isFav(code) { return S.favorites.includes(code); }
+
+async function toggleFavorite(code) {
+  const next = isFav(code)
+    ? S.favorites.filter(c => c !== code)
+    : [...S.favorites, code];
+  try {
+    await window.go.app.App.SetFavorites(next);
+    S.favorites = next;
+    for (const sel of currencySelects) renderDropdownList(sel);
+  } catch (e) { showError(e); }
+}
+
+function enhanceCurrencySelect(sel) {
+  const wrap = document.createElement("div");
+  wrap.className = "cwrap no-drag";
+  sel.parentNode.insertBefore(wrap, sel);
+  wrap.appendChild(sel); // move the select into the wrapper
+
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "cbtn";
+  btn.addEventListener("click", () => toggleDropdown(sel));
+
+  const list = document.createElement("div");
+  list.className = "clist";
+  const search = document.createElement("input");
+  search.type = "text";
+  search.className = "csearch";
+  search.addEventListener("input", () => filterDropdown(sel));
+  search.addEventListener("keydown", e => {
+    e.stopPropagation();
+    if (e.key === "Escape") closeDropdowns();
+  });
+  const rows = document.createElement("div");
+  rows.className = "crows";
+  list.appendChild(search);
+  list.appendChild(rows);
+  wrap.appendChild(btn);
+  //wrap.appendChild(list);
+
+  document.body.appendChild(list);
+  
+  sel.classList.add("chidden");
+  sel._cwidget = { wrap, btn, list, rows, search };
+  currencySelects.push(sel);
+  syncDropdown(sel);
+}
+
+function syncDropdown(sel) {
+  if (!sel._cwidget) return;
+  const o = sel.selectedOptions[0];
+  sel._cwidget.btn.textContent = o ? o.textContent : "—";
+}
+
+/* Open/close + positioning. The list lives in <body> with position:fixed —
+ * it is never clipped by the window and may extend past its bottom edge
+ * (like native comboboxes). The height is fitted to the actual free space
+ * (to the screen edge / taskbar), capped at 240px, so at least 4-5 rows are
+ * always visible. If there is no room below, the list opens upward with its
+ * bottom aligned to the button. */
+function toggleDropdown(sel) {
+  const w = sel._cwidget;
+  const wasOpen = w.list.classList.contains("open");
+  closeDropdowns();
+  if (wasOpen) return;
+  renderDropdownList(sel);
+  w.list.classList.add("open");
+  positionDropdown(sel);
+  w.search.value = "";
+  filterDropdown(sel);
+  w.search.focus();
+}
+
+/* Move the list into <body> once and keep it anchored to the button. Fixed
+ * coordinates are relative to the viewport, which is exactly the window's
+ * inner area — the list may legally go past the bottom of the window. */
+function positionDropdown(sel) {
+  const w = sel._cwidget;
+  if (w.list.parentNode !== document.body) document.body.appendChild(w.list);
+
+  const r = w.wrap.getBoundingClientRect();
+  const vw = window.innerWidth;
+  const vh = window.innerHeight;
+
+  const chrome = 56; // search input + paddings + borders
+  const minRows = 4, rowH = 27, maxH = 240;
+  const spaceBelow = vh - r.bottom - 6;  // free space under the button
+  const spaceAbove = r.top - 6;          // free space above the button
+
+  let h, below;
+  if (spaceBelow >= chrome + minRows * rowH || spaceBelow >= spaceAbove) {
+    below = true;
+    h = Math.min(maxH, Math.max(minRows * rowH + chrome, spaceBelow));
+  } else {
+    below = false;
+    h = Math.min(maxH, Math.max(minRows * rowH + chrome, spaceAbove));
+  }
+  w.rows.style.maxHeight = Math.max(80, h - chrome) + "px";
+
+  let left = Math.max(4, Math.min(r.left, vw - r.width - 4));
+  w.list.style.left = Math.round(left) + "px";
+  w.list.style.width = Math.round(r.width) + "px";
+  w.list.classList.toggle("up", !below);
+  if (below) {
+    w.list.style.top = Math.round(r.bottom + 4) + "px";
+  } else {
+    w.list.style.top = ""; // anchor from the bottom instead
+    w.list.style.bottom = Math.round(vh - r.top + 4) + "px";
+  }
+}
+
+function closeDropdowns() {
+  for (const sel of currencySelects) sel._cwidget.list.classList.remove("open");
+}
+document.addEventListener("click", e => {
+  if (!e.target.closest(".cwrap") && !e.target.closest(".clist")) closeDropdowns();
+});
+document.addEventListener("keydown", e => { if (e.key === "Escape") closeDropdowns(); });
+
+function renderDropdownList(sel) {
+  const w = sel._cwidget;
+  if (!w) return;
+  const opts = [...sel.options].map(o => ({ code: o.value, label: o.textContent }));
+  const favs = S.favorites.map(c => opts.find(o => o.code === c)).filter(Boolean);
+  const rest = opts.filter(o => !isFav(o.code));
+  w.rows.innerHTML = "";
+  for (const o of [...favs, ...rest]) {
+    const row = document.createElement("div");
+    row.className = "crow" + (o.code === sel.value ? " selected" : "");
+    row.dataset.code = o.code;
+    const name = document.createElement("span");
+    name.className = "cname";
+    name.textContent = o.label;
+    const star = document.createElement("button");
+    star.type = "button";
+    star.className = "cstar" + (isFav(o.code) ? " on" : "");
+    star.textContent = isFav(o.code) ? "★" : "☆";
+    star.title = t(isFav(o.code) ? "fav.remove" : "fav.add");
+    star.addEventListener("click", e => {
+      e.stopPropagation(); // star a few currencies in a row — the list stays open
+      toggleFavorite(o.code);
+    });
+    row.addEventListener("click", () => {
+      sel.value = o.code;
+      sel.dispatchEvent(new Event("change")); // existing handlers keep working
+      syncDropdown(sel);
+      closeDropdowns();
+    });
+    row.appendChild(name);
+    row.appendChild(star);
+    w.rows.appendChild(row);
+  }
+  filterDropdown(sel);
+}
+
+function filterDropdown(sel) {
+  const w = sel._cwidget;
+  const q = w.search.value.trim().toLowerCase();
+  for (const row of w.rows.children) {
+    const code = (row.dataset.code ?? "").toLowerCase();
+    const name = row.querySelector(".cname")?.textContent.toLowerCase() ?? "";
+    row.style.display = (!q || code.includes(q) || name.includes(q)) ? "" : "none";
+  }
+}
+
 /* ------------------------------- UI events -------------------------------- */
 for (const [el, side] of [[$("in-amount"), "left"], [$("out-result"), "right"]]) {
   el.addEventListener("input", () => {
-    formatAmountInput(el, el.selectionStart); // caret BEFORE the value rewrite
+    formatAmountInput(el, el.selectionStart);
     S.amountSide = side;
     recalc();
   });
@@ -653,7 +773,7 @@ for (const [el, side] of [[$("in-amount"), "left"], [$("out-result"), "right"]])
 }
  $("sel-left").addEventListener("change", e => {
   S.left = e.target.value;
-  S.pairOverride = null; // a deliberate user choice — automation must not revert it
+  S.pairOverride = null;
   updateFallbackUI();
   recalc();
 });
@@ -663,12 +783,14 @@ for (const [el, side] of [[$("in-amount"), "left"], [$("out-result"), "right"]])
   updateFallbackUI();
   recalc();
 });
- $("swap-amt").addEventListener("click", doSwapAll); // top: amounts + currencies
- $("swap-cur").addEventListener("click", doSwap);    // bottom: currencies only
+ $("swap-amt").addEventListener("click", doSwapAll);
+ $("swap-cur").addEventListener("click", doSwap);
  $("btn-refresh").addEventListener("click", () => window.go.app.App.ManualRefresh());
  $("btn-settings").addEventListener("click", () => openSettings());
+ $("btn-close").addEventListener("click", () => {
+  try { window.runtime.WindowHide(); } catch {}
+});
 
-/* Leaving the settings: with edits — via confirmation, without — instantly. */
  $("btn-back").addEventListener("click", () => {
   if (computeDirty()) {
     openConfirm("back");
@@ -677,8 +799,6 @@ for (const [el, side] of [[$("in-amount"), "left"], [$("out-result"), "right"]])
   showMode("main");
 });
 
-/* Any change of a confirmable setting only marks the form dirty.
- * (Autostart is the exception — handled separately and applied instantly.) */
 for (const id of ["set-left", "set-right", "set-interval", "set-provider", "set-theme", "set-lang"]) {
   $(id).addEventListener("change", updateDirtyUI);
 }
@@ -690,7 +810,6 @@ for (const id of ["set-left", "set-right", "set-interval", "set-provider", "set-
   } catch (e) { showError(e); }
 });
 
-/* Confirmation dialog */
  $("confirm-yes").addEventListener("click", async () => {
   const ctx = confirmCtx;
   try {
@@ -698,21 +817,20 @@ for (const id of ["set-left", "set-right", "set-interval", "set-provider", "set-
     closeConfirm();
     showToast(t("toast.applied"));
     if (ctx === "back") showMode("main");
-  } catch (e) { showError(e); } // a validation error keeps the dialog open
+  } catch (e) { showError(e); }
 });
  $("confirm-no").addEventListener("click", () => {
   const ctx = confirmCtx;
-  revertPending(); // "no" — nothing changes
+  revertPending();
   closeConfirm();
   if (ctx === "back") showMode("main");
 });
 
-/* Mode commands come from the backend (tray -> ShowMode -> event). */
 window.runtime?.EventsOn?.("ui:mode", m => {
   setMode(m);
   if (m === "settings") {
     if (computeDirty()) {
-      openConfirm("reopen"); // returned to unsent edits — ask
+      openConfirm("reopen");
     } else {
       populateSettings();
     }
@@ -722,7 +840,7 @@ window.runtime?.EventsOn?.("ui:mode", m => {
 /* Backend events */
 window.runtime?.EventsOn?.("rates:update", p => {
   applyUpdate(p);
-  refreshSettingsCurrencyLabels(); // labels only; values are untouched
+  refreshSettingsCurrencyLabels();
   refreshProviderStatuses();
 });
 window.runtime?.EventsOn?.("rates:error", () => {
@@ -735,12 +853,17 @@ window.runtime?.EventsOn?.("refresh:busy", b => setRefreshBusy(!!b));
 window.runtime?.EventsOn?.("refresh:cooldown", s => startCooldownUI(s | 0));
 window.runtime?.EventsOn?.("theme:changed", th => applyTheme(th));
 window.runtime?.EventsOn?.("i18n:changed", p => applyDict(p?.dict));
+window.runtime?.EventsOn?.("stayopen:changed", on => { S.stayOpen = !!on; });
+window.runtime?.EventsOn?.("favorites:changed", favs => {
+  S.favorites = favs ?? [];
+  for (const sel of currencySelects) renderDropdownList(sel);
+});
 window.runtime?.EventsOn?.("autostart:changed", on => {
   $("set-autostart").setAttribute("aria-checked", String(!!on));
 });
 window.runtime?.EventsOn?.("defaults:changed", cfg => {
   S.left = cfg.base_currency; S.right = cfg.target_currency;
-  S.pairOverride = null; // the user pinned the pair deliberately
+  S.pairOverride = null;
   fillSelect($("sel-left"), S.left); fillSelect($("sel-right"), S.right);
   updateFallbackUI();
 });
@@ -753,26 +876,41 @@ document.querySelectorAll(".tab").forEach(btn => btn.addEventListener("click", (
   $("tab-about").hidden = btn.dataset.tab !== "about";
 }));
 
-/* The autostart toggle applies instantly (the exclusion from confirmations). */
+/* Instant toggles (excluded from the confirmation flow). */
  $("set-autostart").addEventListener("click", async () => {
   const st = await window.go.app.App.GetInitState();
   const nxt = !st.autostart_enabled;
   $("set-autostart").setAttribute("aria-checked", String(nxt));
-  await window.go.app.App.SetAutoStart(nxt);
+  try { await window.go.app.App.SetAutoStart(nxt); }
+  catch (e) { showError(e); $("set-autostart").setAttribute("aria-checked", String(!nxt)); }
 });
+ $("set-stayopen").addEventListener("click", async () => {
+  const st = await window.go.app.App.GetInitState();
+  const nxt = !st.config.stay_open;
+  $("set-stayopen").setAttribute("aria-checked", String(nxt));
+  try { await window.go.app.App.SetStayOpen(nxt); }
+  catch (e) { showError(e); $("set-stayopen").setAttribute("aria-checked", String(!nxt)); }
+});
+
+/* Enhance the currency selects before the first fill (the hidden native
+ * selects stay the state holders; the custom dropdown draws on top). */
+document.querySelectorAll("select.ccurrency").forEach(enhanceCurrencySelect);
 
 /* --------------------------------- start ---------------------------------- */
 (async function init() {
   try {
     const st = await window.go.app.App.GetInitState();
-    applyDict(st.i18n);        // the dictionary BEFORE the first render
+    applyDict(st.i18n);
     applyTheme(st.config.theme);
     S.names = st.update.names ?? {};
+    S.favorites = st.config.favorites ?? [];
+    S.stayOpen = !!st.config.stay_open;
+    S.provider = st.provider ?? "";
     S.left = st.config.base_currency; S.right = st.config.target_currency;
     applyUpdate(st.update);
     setRefreshBusy(false);
-    startCooldownUI(st.cooldown_sec | 0); // the app was restarted mid-cooldown
-    setMode("main"); // the window stays hidden until a tray click
+    startCooldownUI(st.cooldown_sec | 0);
+    setMode("main");
   } catch (e) {
     reportToLog("error", "init failed: " + (e?.stack ?? e));
     console.error("init:", e);

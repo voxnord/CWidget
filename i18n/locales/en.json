@@ -46,6 +46,11 @@
   "theme.light": "Light",
   "settings.language": "Language",
   "settings.autostart": "Launch at system startup",
+  "ui.close": "Close",
+  "ui.search": "Search",
+  "settings.stay_open": "Keep the window open when clicking outside (on top)",
+  "fav.add": "Add to favorites",
+  "fav.remove": "Remove from favorites",
   "settings.save": "Save",
 
   "about.name": "Currency Converter",

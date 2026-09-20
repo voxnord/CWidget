@@ -39,6 +39,9 @@ const (
     wsThickFrame           = 0x00040000 // WS_THICKFRAME: invisible resize frame
     wsMaximizeBox          = 0x00010000 // WS_MAXIMIZEBOX: allows maximize (Win+Up)
 
+    hwndTopmost   = ^uintptr(0) - 0 // HWND_TOPMOST  (-1)
+    hwndNotopmost = ^uintptr(1) - 0 // HWND_NOTOPMOST (-2)
+
     swpNoSize       = 0x0001
     swpNoMove       = 0x0002
     swpNoZOrder     = 0x0004
@@ -222,4 +225,23 @@ func FocusWindow(title string) {
     }
     procShowWindow.Call(hwnd, swRestore) // restore if minimized
     procSetForegroundWindow.Call(hwnd)
+}
+
+/* ------------------------------- topmost --------------------------------- */
+
+// SetTopmost toggles the WS_EX_TOPMOST style (always on top). A hidden
+// window does not need the style: ShowMode re-applies it on every show.
+// Best-effort like the rest of the package.
+func SetTopmost(title string, enable bool) {
+    hwnd := findHwnd(title)
+    if hwnd == 0 {
+        return
+    }
+    if enable {
+        procSetWindowPos.Call(hwnd, hwndTopmost, 0, 0, 0, 0,
+            swpNoSize|swpNoMove|swpNoActivate)
+        return
+    }
+    procSetWindowPos.Call(hwnd, hwndNotopmost, 0, 0, 0, 0,
+        swpNoSize|swpNoMove|swpNoActivate)
 }

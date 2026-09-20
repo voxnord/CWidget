@@ -160,7 +160,7 @@ func main() {
     err = wails.Run(&options.App{
         Title:       winTitle,
         Width:       380,
-        Height:      260,
+        Height:      300,
         Frameless:   true, // no native frame — the UI provides its own chrome
         StartHidden: true,  // starts minimized to the tray
         AssetServer: &assetserver.Options{Assets: assets},

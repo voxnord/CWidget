@@ -23,6 +23,8 @@ type Config struct {
     Provider   string   `json:"provider,omitempty"`           // selected rates source (key)
     Theme      string   `json:"theme,omitempty"`              // "dark" | "light"
     Language   string   `json:"language,omitempty"`           // language code ("ru", "en", ...)
+    StayOpen   bool     `json:"stay_open"`                    // keep the window open on focus loss (and keep it on top while visible)
+    Favorites  []string `json:"favorites,omitempty"`          // favorite currency codes (global, provider-agnostic)
     Priority   []string `json:"providers_priority,omitempty"` // provider registration order
 }
 
@@ -76,6 +78,33 @@ func Default() *Config {
     return &Config{Base: "RUB", Target: "KZT", RefreshMin: 60}
 }
 
+// NormalizeFavorites uppercases, validates (3 letters A-Z) and deduplicates
+// the list, preserving the user's order. Exported: it is also used by the
+// app package when the frontend replaces the favorites list.
+func NormalizeFavorites(in []string) []string {
+    seen := map[string]bool{}
+    out := make([]string, 0, len(in))
+    for _, c := range in {
+        c = strings.ToUpper(strings.TrimSpace(c))
+        if len(c) != 3 || seen[c] {
+            continue
+        }
+        valid := true
+        for _, r := range c {
+            if r < 'A' || r > 'Z' {
+                valid = false
+                break
+            }
+        }
+        if !valid {
+            continue
+        }
+        seen[c] = true
+        out = append(out, c)
+    }
+    return out
+}
+
 func sanitize(c *Config) {
     c.Base = strings.ToUpper(strings.TrimSpace(c.Base))
     c.Target = strings.ToUpper(strings.TrimSpace(c.Target))
@@ -87,6 +116,7 @@ func sanitize(c *Config) {
     }
     // Language validity is checked by i18n in main.go (the config package
     // must not know about it).
+    c.Favorites = NormalizeFavorites(c.Favorites)
     if c.RefreshMin < 5 {
         c.RefreshMin = 5
     }
