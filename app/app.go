@@ -23,7 +23,7 @@ import (
 //
 //	-ldflags "-X <module>/app.Version=1.2.3"
 //
-// The value "dev" means the app was started from sources (wails dev / go run).
+// The value "dev" means the app was TrayBridgerted from sources (wails dev / go run).
 var Version = "dev"
 
 // WindowTitle is the unique window title. It is set from main.go BEFORE
@@ -35,6 +35,7 @@ var WindowTitle string
 type TrayBridge interface {
     SetUpdatedLabel(at time.Time)
     SetAutoState(on bool)
+    SetStayOpenState(on bool) // keep the tray checkbox in sync with the config
     SetBusy(busy bool)
     Cooldown(d time.Duration)
     NotifyFailure(reason string)
@@ -107,7 +108,7 @@ func (a *App) Startup(ctx context.Context) {
 
 func (a *App) BeforeClose(ctx context.Context) bool {
     // Closing the window = hiding it (the widget lives in the tray).
-    // Quitting happens only via the tray menu.
+    // Quitting happens only via the tray menu or uninstall.
     if a.exiting.Load() {
         return false
     }
@@ -119,8 +120,7 @@ func (a *App) BeforeClose(ctx context.Context) bool {
 
 // LogFrontend records a message from the JS side into the same log file.
 // A production build has no DevTools console, so without this bridge a
-// frontend failure (window.onerror, unhandledrejection) would leave no trace
-// at all. The frontend caps the number of messages per session.
+// frontend failure would leave no trace at all.
 func (a *App) LogFrontend(level, msg string) {
     log.Printf("[frontend:%s] %s", level, msg)
 }

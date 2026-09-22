@@ -112,6 +112,7 @@
       <p class="about"><b><span data-i18n="about.name">Конвертер валют</span></b> <span id="ver"></span> <span data-i18n="about.tagline">— виджет в трее.</span></p>
       <p class="about" data-i18n="about.sources"></p>
       <p class="about" data-i18n="about.stack"></p>
+      <button id="btn-uninstall" class="danger" data-i18n="settings.uninstall">Удалить приложение и данные</button>      
     </div>
 
     <div id="toast" class="toast">Сохранено</div>
@@ -123,11 +124,11 @@
      styled with the same theme variables. -->
 <div id="confirm-overlay" class="confirm-overlay" hidden>
   <div class="confirm" role="dialog" aria-modal="true">
-    <p class="confirm-title" data-i18n="confirm.title">Применить изменения?</p>
-    <p class="confirm-text" data-i18n="confirm.text">Настройки были изменены. Сохранить новые значения?</p>
+    <p class="confirm-title" id="confirm-title">…</p>
+    <p class="confirm-text" id="confirm-text">…</p>
     <div class="confirm-actions">
-      <button id="confirm-yes" class="primary" data-i18n="confirm.yes">Да</button>
-      <button id="confirm-no" class="ghost" data-i18n="confirm.no">Нет</button>
+      <button id="confirm-yes" class="primary">…</button>
+      <button id="confirm-no" class="ghost">…</button>
     </div>
   </div>
 </div>

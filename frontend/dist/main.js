@@ -102,6 +102,7 @@ function updateFallbackUI() {
   }
   warn.title = tip;
 }
+/* Apply a dictionary to all marked elements, then redraw dynamic texts. */
 function applyDict(dict) {
   if (!dict) return;
   S.dict = dict;
@@ -426,6 +427,8 @@ function setMode(mode) {
   }
 }
 
+/* Refresh ONLY the currency labels in the open settings (fresh data arrived —
+ * e.g. after a provider switch). Selected values are never touched. */
 function refreshSettingsCurrencyLabels() {
   if ($("view-settings").hidden) return;
   if (!$("confirm-overlay").hidden) return;
@@ -469,10 +472,21 @@ function updateDirtyUI() {
   return dirty;
 }
 
+/* The dialog serves two scenarios: leaving settings with unsaved edits
+ * ("back"/"reopen") and the irreversible uninstall. Texts are set
+ * dynamically, hence no data-i18n on those elements. */
 function openConfirm(ctx) {
   confirmCtx = ctx;
+  const m = ctx === "uninstall"
+    ? { t: "uninstall.title", x: "uninstall.text", y: "uninstall.yes", n: "uninstall.no" }
+    : { t: "confirm.title", x: "confirm.text", y: "confirm.yes", n: "confirm.no" };
+  $("confirm-title").textContent = t(m.t);
+  $("confirm-text").textContent = t(m.x);
+  $("confirm-yes").textContent = t(m.y);
+  $("confirm-no").textContent = t(m.n);
   $("confirm-overlay").hidden = false;
 }
+
 function closeConfirm() {
   $("confirm-overlay").hidden = true;
   confirmCtx = null;
@@ -552,7 +566,8 @@ async function openSettings() {
   showMode("settings");
 }
 
-/* Provider status line (see tray.go / manager.go for the data source). */
+/* Provider status line: available / unavailable (time) / not checked yet.
+ * The full text of the last error is in the tooltip. */
 function renderProviderStatuses(list) {
   const el = $("provider-status");
   if (!el) return;
@@ -592,6 +607,8 @@ async function refreshProviderStatuses() {
  * holder and keeps firing change events for all existing handlers), and a
  * custom list is drawn on top — favorites duplicated at the top (the
  * provider's own order below is untouched), a star per row, a search filter.
+ * The list lives in <body> with position:fixed: never clipped by the window,
+ * may extend past its bottom edge (like native comboboxes).
  * Favorites are a GLOBAL list of ISO codes: provider-agnostic by design,
  * unavailable codes are just not rendered for the current source. */
 const currencySelects = [];
@@ -613,7 +630,7 @@ function enhanceCurrencySelect(sel) {
   const wrap = document.createElement("div");
   wrap.className = "cwrap no-drag";
   sel.parentNode.insertBefore(wrap, sel);
-  wrap.appendChild(sel); // move the select into the wrapper
+  wrap.appendChild(sel);
 
   const btn = document.createElement("button");
   btn.type = "button";
@@ -635,10 +652,8 @@ function enhanceCurrencySelect(sel) {
   list.appendChild(search);
   list.appendChild(rows);
   wrap.appendChild(btn);
-  //wrap.appendChild(list);
+  document.body.appendChild(list); // fixed positioning — above everything
 
-  document.body.appendChild(list);
-  
   sel.classList.add("chidden");
   sel._cwidget = { wrap, btn, list, rows, search };
   currencySelects.push(sel);
@@ -651,12 +666,10 @@ function syncDropdown(sel) {
   sel._cwidget.btn.textContent = o ? o.textContent : "—";
 }
 
-/* Open/close + positioning. The list lives in <body> with position:fixed —
- * it is never clipped by the window and may extend past its bottom edge
- * (like native comboboxes). The height is fitted to the actual free space
- * (to the screen edge / taskbar), capped at 240px, so at least 4-5 rows are
- * always visible. If there is no room below, the list opens upward with its
- * bottom aligned to the button. */
+/* Open/close + positioning. The height is fitted to the actual free space
+ * (to the screen edge / taskbar), so at least 4-5 rows are always visible.
+ * If there is no room below, the list opens upward with its bottom aligned
+ * to the button. */
 function toggleDropdown(sel) {
   const w = sel._cwidget;
   const wasOpen = w.list.classList.contains("open");
@@ -670,21 +683,16 @@ function toggleDropdown(sel) {
   w.search.focus();
 }
 
-/* Move the list into <body> once and keep it anchored to the button. Fixed
- * coordinates are relative to the viewport, which is exactly the window's
- * inner area — the list may legally go past the bottom of the window. */
 function positionDropdown(sel) {
   const w = sel._cwidget;
-  if (w.list.parentNode !== document.body) document.body.appendChild(w.list);
-
   const r = w.wrap.getBoundingClientRect();
-  const vw = window.innerWidth;
   const vh = window.innerHeight;
+  const vw = window.innerWidth;
 
   const chrome = 56; // search input + paddings + borders
   const minRows = 4, rowH = 27, maxH = 240;
-  const spaceBelow = vh - r.bottom - 6;  // free space under the button
-  const spaceAbove = r.top - 6;          // free space above the button
+  const spaceBelow = vh - r.bottom - 6;
+  const spaceAbove = r.top - 6;
 
   let h, below;
   if (spaceBelow >= chrome + minRows * rowH || spaceBelow >= spaceAbove) {
@@ -696,14 +704,15 @@ function positionDropdown(sel) {
   }
   w.rows.style.maxHeight = Math.max(80, h - chrome) + "px";
 
-  let left = Math.max(4, Math.min(r.left, vw - r.width - 4));
+  const left = Math.max(4, Math.min(r.left, vw - r.width - 4));
   w.list.style.left = Math.round(left) + "px";
   w.list.style.width = Math.round(r.width) + "px";
   w.list.classList.toggle("up", !below);
   if (below) {
     w.list.style.top = Math.round(r.bottom + 4) + "px";
+    w.list.style.bottom = "";
   } else {
-    w.list.style.top = ""; // anchor from the bottom instead
+    w.list.style.top = "";
     w.list.style.bottom = Math.round(vh - r.top + 4) + "px";
   }
 }
@@ -791,6 +800,7 @@ for (const [el, side] of [[$("in-amount"), "left"], [$("out-result"), "right"]])
   try { window.runtime.WindowHide(); } catch {}
 });
 
+/* Leaving the settings: with edits — via confirmation, without — instantly. */
  $("btn-back").addEventListener("click", () => {
   if (computeDirty()) {
     openConfirm("back");
@@ -812,20 +822,28 @@ for (const id of ["set-left", "set-right", "set-interval", "set-provider", "set-
 
  $("confirm-yes").addEventListener("click", async () => {
   const ctx = confirmCtx;
+  if (ctx === "uninstall") {
+    closeConfirm();
+    try { await window.go.app.App.Uninstall(); } // the backend quits; the cleanup script takes over
+    catch (e) { showError(e); }
+    return;
+  }
   try {
     await applyPending();
     closeConfirm();
     showToast(t("toast.applied"));
     if (ctx === "back") showMode("main");
-  } catch (e) { showError(e); }
+  } catch (e) { showError(e); } // a validation error keeps the dialog open
 });
  $("confirm-no").addEventListener("click", () => {
   const ctx = confirmCtx;
+  if (ctx === "uninstall") { closeConfirm(); return; } // nothing changes
   revertPending();
   closeConfirm();
   if (ctx === "back") showMode("main");
 });
 
+/* Mode commands come from the backend (tray -> ShowMode -> event). */
 window.runtime?.EventsOn?.("ui:mode", m => {
   setMode(m);
   if (m === "settings") {
@@ -891,6 +909,9 @@ document.querySelectorAll(".tab").forEach(btn => btn.addEventListener("click", (
   try { await window.go.app.App.SetStayOpen(nxt); }
   catch (e) { showError(e); $("set-stayopen").setAttribute("aria-checked", String(!nxt)); }
 });
+
+/* Irreversible uninstall — through the shared confirmation dialog. */
+ $("btn-uninstall").addEventListener("click", () => openConfirm("uninstall"));
 
 /* Enhance the currency selects before the first fill (the hidden native
  * selects stay the state holders; the custom dropdown draws on top). */

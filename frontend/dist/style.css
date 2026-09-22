@@ -141,3 +141,7 @@ a{color:var(--accent)}
 .cstar{border:none;background:transparent;color:var(--dim);cursor:pointer;font-size:14px;line-height:1;padding:2px 4px;flex:0 0 auto}
 .cstar.on{color:var(--warn)}
 .cstar:hover{color:var(--txt)}
+
+/* Destructive action (uninstall) */
+.danger{margin-top:4px;padding:8px;border:1px solid var(--down);border-radius:8px;background:transparent;color:var(--down);font-weight:600;cursor:pointer}
+.danger:hover{background:var(--down);color:#fff}

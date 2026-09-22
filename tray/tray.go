@@ -19,25 +19,24 @@ type Hooks struct {
     OpenSettings    func()
     Refresh         func()
     ToggleAutoStart func(enable bool)
-    // GetAutoStart returns the ACTUAL autostart state (the OS is the source
-    // of truth). It is polled when the menu is built, so the checkbox is in
-    // sync from the very first launch — without it the tray kept its local
-    // autoOn=false and showed the item unchecked even when autostart was on
-    // (the first click then "fixed" the state by accident).
-    GetAutoStart func() bool
-    SetLanguage  func(code string)
-    Quit         func()
+    GetAutoStart    func() bool // the actual OS state, polled when the menu is built
+    ToggleStayOpen  func(enable bool)
+    GetStayOpen     func() bool // the actual config state, polled when the menu is built
+    SetLanguage     func(code string)
+    Quit            func()
 }
 
 type Tray struct {
     iconICO []byte // Windows (.ico)
     iconPNG []byte // Linux/macOS
     hooks   Hooks
-    autoOn  bool // local checkbox state (for click toggling)
+    autoOn  bool // local checkbox states (seeded from the sources of truth)
+    stayOn  bool
 
     mOpen     *systray.MenuItem
     mRefresh  *systray.MenuItem
     mAuto     *systray.MenuItem
+    mOnTop    *systray.MenuItem
     mSettings *systray.MenuItem
     mQuit     *systray.MenuItem
     mLang     *systray.MenuItem
@@ -64,8 +63,8 @@ func (t *Tray) Stop() { systray.Quit() }
 // safeGo runs fn on its own goroutine with a panic shield. Two rules make
 // the tray survive long idle periods:
 //   1. never run application logic ON the tray message-loop thread —
-//      a blocking call there (cross-thread window ops, I/O) wedges the loop
-//      and the icon stops responding to ANY click, including Quit;
+//      a blocking call there wedges the loop and the icon stops responding
+//      to ANY click, including Quit;
 //   2. never let a panic escape — an uncaught panic in any goroutine kills
 //      the whole process and leaves a zombie icon behind.
 func safeGo(what string, fn func()) {
@@ -87,25 +86,19 @@ func (t *Tray) onReady() {
     }
     systray.SetTooltip(i18n.T("tray.tooltip"))
 
-    // Left click — open the converter window, do NOT show the menu
-    // (ShowMenu is not called). Works on Windows/macOS. On Linux the
-    // AppIndicator protocol does not report the click type in most DEs —
-    // the menu will open there regardless; the "Open" menu item keeps the
-    // functionality. Click lines are logged: they are the first checkpoint
-    // when diagnosing a "dead" tray.
+    // Left click — open the converter window, do NOT show the menu.
+    // Right click — context menu. Double click — the window as well.
+    // Click lines are logged: the first checkpoint when diagnosing a "dead" tray.
     systray.SetOnClick(func(_ systray.IMenu) {
         log.Printf("[tray] left click -> show request")
         if t.hooks.ShowWidget != nil {
             safeGo("show", t.hooks.ShowWidget)
         }
     })
-    // Right click — context menu. ShowMenu MUST stay on the tray thread
-    // (TrackPopupMenu runs its modal loop there), so it is called directly.
     systray.SetOnRClick(func(menu systray.IMenu) {
         log.Printf("[tray] right click -> menu")
-        menu.ShowMenu()
+        menu.ShowMenu() // MUST stay on the tray thread (modal TrackPopupMenu)
     })
-    // Double click — the window as well.
     systray.SetOnDClick(func(_ systray.IMenu) {
         log.Printf("[tray] double click -> show request")
         if t.hooks.ShowWidget != nil {
@@ -113,23 +106,26 @@ func (t *Tray) onReady() {
         }
     })
 
-    // Seed the checkbox from the ACTUAL state (the OS), not from a local
-    // assumption — this is what keeps the tray in sync with the settings
-    // toggle without any user interaction.
+    // Seed both checkboxes from the sources of truth (the OS and the config)
+    // so the menu is in sync from the very first launch.
     t.autoOn = false
     if t.hooks.GetAutoStart != nil {
         t.autoOn = t.hooks.GetAutoStart()
+    }
+    t.stayOn = false
+    if t.hooks.GetStayOpen != nil {
+        t.stayOn = t.hooks.GetStayOpen()
     }
 
     t.mOpen = systray.AddMenuItem(i18n.T("tray.open"), i18n.T("tray.open.tip"))
     t.mRefresh = systray.AddMenuItem(t.refreshTitle(), i18n.T("tray.refresh.tip"))
     systray.AddSeparator()
+    t.mOnTop = systray.AddMenuItemCheckbox(i18n.T("tray.ontop"), i18n.T("tray.ontop.tip"), t.stayOn)
     t.mAuto = systray.AddMenuItemCheckbox(i18n.T("tray.autostart"), i18n.T("tray.autostart.tip"), t.autoOn)
     t.mSettings = systray.AddMenuItem(i18n.T("tray.settings"), i18n.T("tray.settings.tip"))
 
-    // Language submenu: the parent item is a regular menu item, language
-    // entries are added via the AddSubMenuItem method of that item. A new
-    // language (a new JSON in locales/) appears here automatically.
+    // Language submenu: a new language (a new JSON in locales/) appears here
+    // automatically.
     t.mLang = systray.AddMenuItem(i18n.T("tray.language"), i18n.T("tray.language"))
     t.langItems = make(map[string]*systray.MenuItem)
     for _, l := range i18n.Languages() {
@@ -158,6 +154,14 @@ func (t *Tray) onReady() {
             t.autoOn = !t.autoOn
             if t.hooks.ToggleAutoStart != nil {
                 t.hooks.ToggleAutoStart(t.autoOn)
+            }
+        })
+    })
+    t.mOnTop.Click(func() {
+        safeGo("stayopen-toggle", func() {
+            t.stayOn = !t.stayOn
+            if t.hooks.ToggleStayOpen != nil {
+                t.hooks.ToggleStayOpen(t.stayOn)
             }
         })
     })
@@ -205,9 +209,7 @@ func (t *Tray) inCooldown() bool {
 }
 
 // applyTooltip builds the tray icon tooltip. Priority mirrors severity:
-// "offline" (nobody answered) > degraded (the fallback answered) > normal.
-// Provider names come from the dictionary by keys — Retranslate() rebuilds
-// the tooltip on a language switch automatically.
+// "offline" > degraded (the fallback answered) > normal.
 func (t *Tray) applyTooltip() {
     t.mu.RLock()
     pref, act, stale, last := t.degPref, t.degAct, t.stale, t.lastUpdate
@@ -247,6 +249,19 @@ func (t *Tray) SetStale(stale bool) {
     t.applyTooltip()
 }
 
+// SetStayOpenState pins the on-top checkbox to the fact (called by the app
+// after the setting is saved — from the settings toggle as well).
+func (t *Tray) SetStayOpenState(on bool) {
+    t.stayOn = on
+    if t.mOnTop != nil {
+        if on {
+            t.mOnTop.Check()
+        } else {
+            t.mOnTop.Uncheck()
+        }
+    }
+}
+
 // Retranslate translates all menu items and the tooltip to the current
 // i18n language. Idempotent.
 func (t *Tray) Retranslate() {
@@ -259,8 +274,7 @@ func (t *Tray) Retranslate() {
 
     switch {
     case t.inCooldown():
-        // the countdown title is redrawn by the cooldown ticker — it calls
-        // i18n.T at each tick
+        // the countdown title is redrawn by the cooldown ticker
     case t.mRefresh.Disabled():
         t.mRefresh.SetTitle(i18n.T("tray.refresh.busy"))
     default:
@@ -268,6 +282,8 @@ func (t *Tray) Retranslate() {
     }
     t.mRefresh.SetTooltip(i18n.T("tray.refresh.tip"))
 
+    t.mOnTop.SetTitle(i18n.T("tray.ontop"))
+    t.mOnTop.SetTooltip(i18n.T("tray.ontop.tip"))
     t.mAuto.SetTitle(i18n.T("tray.autostart"))
     t.mAuto.SetTooltip(i18n.T("tray.autostart.tip"))
     t.mSettings.SetTitle(i18n.T("tray.settings"))

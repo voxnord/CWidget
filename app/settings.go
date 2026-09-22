@@ -2,6 +2,8 @@ package app
 
 import (
 	"errors"
+	"log"
+	"os"
 	"strings"
 	"time"
 
@@ -68,21 +70,32 @@ func (a *App) SetProvider(key string) error {
     return nil
 }
 
-// SetStayOpen toggles the "keep window open on focus loss" mode. Applied
-// immediately: the always-on-top state follows the mode while the window is
-// visible, and the frontend stops auto-hiding on blur (stayopen:changed).
+// StayOpenState exposes the stay-open flag to the tray hooks: the context
+// menu seeds its checkbox from it at build time.
+func (a *App) StayOpenState() bool {
+    a.cfgMu.Lock()
+    defer a.cfgMu.Unlock()
+    return a.cfg.StayOpen
+}
+
+// SetStayOpen toggles the "keep window open on focus loss" mode (aka
+// "always on top while visible"). Applied immediately: topmost follows the
+// mode, the frontend stops/starts auto-hiding on blur (stayopen:changed),
+// and the tray checkbox is pinned to the fact.
 func (a *App) SetStayOpen(enable bool) error {
     a.cfgMu.Lock()
     a.cfg.StayOpen = enable
     saveErr := config.Save(a.cfg)
-    stay := a.cfg.StayOpen
     a.cfgMu.Unlock()
     if saveErr != nil {
         return saveErr
     }
     if a.ctx != nil {
-        runtime.WindowSetAlwaysOnTop(a.ctx, stay)
+        runtime.WindowSetAlwaysOnTop(a.ctx, enable)
         runtime.EventsEmit(a.ctx, "stayopen:changed", enable)
+    }
+    if a.trayB != nil {
+        a.trayB.SetStayOpenState(enable)
     }
     return nil
 }
@@ -105,8 +118,7 @@ func (a *App) SetFavorites(codes []string) error {
     return nil
 }
 
-// SetTheme switches the theme ("dark" | "light"). Applied immediately:
-// the frontend receives theme:changed and toggles the class on <body>.
+// SetTheme switches the theme ("dark" | "light"). Applied immediately.
 func (a *App) SetTheme(theme string) error {
     theme = strings.ToLower(strings.TrimSpace(theme))
     if theme != "dark" && theme != "light" {
@@ -213,5 +225,37 @@ func (a *App) SetAutoStart(enable bool) error {
     if a.ctx != nil {
         runtime.EventsEmit(a.ctx, "autostart:changed", enable)
     }
+    return nil
+}
+
+// Uninstall removes the autostart entry, schedules the deletion of the app
+// data folder and the executable (see uninstall_windows.go /
+// uninstall_linux.go for the detached-cleanup trick) and quits.
+// The frontend confirms first — this is irreversible.
+//
+// ORDER MATTERS: schedule everything FIRST, quit LAST. The previous version
+// quit before scheduling — the process raced its own exit: the script file
+// and the RunOnce entry were written, but the detached cmd was never
+// spawned, and the spawn error drowned with the dying app.
+func (a *App) Uninstall() error {
+    log.Printf("[app] uninstall requested")
+    _ = autostartDisable()
+    exe, err := os.Executable()
+    if err != nil {
+        log.Printf("[app] uninstall: cannot resolve the executable: %v", err)
+        return err
+    }
+    dataDir, err := config.Dir()
+    if err != nil {
+        log.Printf("[app] uninstall: cannot resolve the data dir: %v", err)
+        return err
+    }
+    if err := runSelfUninstall(dataDir, exe); err != nil {
+        // runSelfUninstall logs the details itself; the app stays alive so
+        // the user sees the error and can retry.
+        return err
+    }
+    log.Printf("[app] cleanup scheduled — quitting now")
+    a.Quit()
     return nil
 }

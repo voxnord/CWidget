@@ -143,6 +143,13 @@ func main() {
                 log.Printf("[tray] language switch to %q failed: %v", code, err)
             }
         },
+        
+        ToggleStayOpen: func(enable bool) {
+            if err := appCore.SetStayOpen(enable); err != nil {
+                log.Printf("[tray] stay-open toggle failed (enable=%v): %v", enable, err)
+            }
+        },
+        GetStayOpen: appCore.StayOpenState,        
         Quit: appCore.Quit,
     }
     trayCtl := tray.New(iconICO, iconPNG, hooks)
