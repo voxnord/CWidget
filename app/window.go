@@ -15,22 +15,10 @@ import (
 // the tray responsive even if a show call hangs below.
 var showMu sync.Mutex
 
-// Window sizes per mode. The main window is a bit taller than the grid
-// strictly requires: it leaves breathing room for the currency dropdowns,
-// which can open either way inside the clipped rounded window.
-const (
-    mainW = 380
-    mainH = 300
-    setW  = 380
-    setH  = 560
-)
-
 // ShowMode is the single presentation entry point: size per mode, position
-// near the tray, corner rounding for the actual size, focus, and the
-// always-on-top state per the stay-open mode. Every step is logged — if the
-// window ever fails to appear, the log shows exactly which step hung.
-// Panics are shielded: the call can come from a tray goroutine, where an
-// uncaught panic would kill the whole process.
+// (remembered for the widget; clamped for the taller settings view),
+// corner rounding for the actual size, focus, and the always-on-top state
+// per the stay-open mode.
 func (a *App) ShowMode(mode string) {
     Safe("window.ShowMode("+mode+")", func() { a.showMode(mode) })
 }
@@ -46,19 +34,46 @@ func (a *App) showMode(mode string) {
     defer showMu.Unlock()
 
     log.Printf("[window] ShowMode(%s): enter", mode)
-    w, h := mainW, mainH
+    w, h := 380, 300
     if mode == "settings" {
-        w, h = setW, setH
+        w, h = 380, 600
     }
     runtime.WindowSetSize(a.ctx, w, h)
     log.Printf("[window] ShowMode(%s): size set", mode)
 
-    popup.MoveNearTray(WindowTitle)
+    a.cfgMu.Lock()
+    remember := a.cfg.RememberPos
+    hasPos, px, py := a.cfg.HasPos, a.cfg.PosX, a.cfg.PosY
+    a.cfgMu.Unlock()
+
+    // Positioning model: the SAVED position belongs to the widget (main
+    // window). The settings view is a taller, transient view of the same
+    // anchor — it is clamped into the work area so it never dives under the
+    // taskbar (any taskbar edge) or off the screen. Clamped settings
+    // coordinates are never persisted (the watcher saves only in main mode).
+    placed := false
+    if remember && hasPos {
+        switch mode {
+        case "main":
+            placed = popup.SetWindowPosAbs(WindowTitle, px, py)
+        default: // settings
+            if fx, fy, ok := popup.FitToWorkArea(px, py, w, h); ok {
+                placed = popup.SetWindowPosAbs(WindowTitle, fx, fy)
+                if placed && (fx != px || fy != py) {
+                    log.Printf("[window] settings anchored at (%d,%d) clamped to (%d,%d) to fit the work area", px, py, fx, fy)
+                }
+            }
+        }
+        if !placed {
+            log.Printf("[window] saved position (%d,%d) unavailable — falling back to tray", px, py)
+        }
+    }
+    if !placed {
+        popup.MoveNearTray(WindowTitle) // taskbar-edge aware
+    }
     popup.RoundCorners(WindowTitle) // the region depends on the size — after the resize
     log.Printf("[window] ShowMode(%s): positioned", mode)
 
-    // Stay-open mode: keep the window on top of others while it is visible.
-    // In the regular popup mode the window behaves like a normal one.
     a.cfgMu.Lock()
     stayOpen := a.cfg.StayOpen
     a.cfgMu.Unlock()
@@ -67,6 +82,8 @@ func (a *App) showMode(mode string) {
     runtime.WindowShow(a.ctx)
     runtime.WindowSetAlwaysOnTop(a.ctx, stayOpen)
     popup.FocusWindow(WindowTitle)
+    a.shownOnce.Store(true) // the position watcher starts persisting from now on
+    a.curMode.Store(mode)   // set AFTER the move: no transient positions are ever persisted
     log.Printf("[window] ShowMode(%s): shown (topmost=%v)", mode, stayOpen)
 
     runtime.EventsEmit(a.ctx, "ui:mode", mode)

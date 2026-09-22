@@ -39,6 +39,7 @@ window.addEventListener("blur", () => {
     if (S.stayOpen) return; // the user pinned the window — no auto-hide
     if (Date.now() < hideGuardUntil) return;
     if (document.hasFocus()) return;
+    try { window.go.app.App.SavePosition(); } catch {} // the position at hide time is the one to remember
     try { window.runtime.WindowHide(); } catch {}
   }, 120);
 });
@@ -532,6 +533,7 @@ async function populateSettings() {
   $("set-interval").value = saved.interval;
   $("set-autostart").setAttribute("aria-checked", String(st.autostart_enabled));
   $("set-stayopen").setAttribute("aria-checked", String(!!st.config.stay_open));
+  $("set-rememberpos").setAttribute("aria-checked", String(!!st.config.remember_position));
 
   const provSel = $("set-provider");
   provSel.innerHTML = "";
@@ -797,6 +799,7 @@ for (const [el, side] of [[$("in-amount"), "left"], [$("out-result"), "right"]])
  $("btn-refresh").addEventListener("click", () => window.go.app.App.ManualRefresh());
  $("btn-settings").addEventListener("click", () => openSettings());
  $("btn-close").addEventListener("click", () => {
+  try { window.go.app.App.SavePosition(); } catch {}
   try { window.runtime.WindowHide(); } catch {}
 });
 
@@ -872,6 +875,9 @@ window.runtime?.EventsOn?.("refresh:cooldown", s => startCooldownUI(s | 0));
 window.runtime?.EventsOn?.("theme:changed", th => applyTheme(th));
 window.runtime?.EventsOn?.("i18n:changed", p => applyDict(p?.dict));
 window.runtime?.EventsOn?.("stayopen:changed", on => { S.stayOpen = !!on; });
+window.runtime?.EventsOn?.("rememberpos:changed", on => {
+  $("set-rememberpos").setAttribute("aria-checked", String(!!on));
+});
 window.runtime?.EventsOn?.("favorites:changed", favs => {
   S.favorites = favs ?? [];
   for (const sel of currencySelects) renderDropdownList(sel);
@@ -908,6 +914,13 @@ document.querySelectorAll(".tab").forEach(btn => btn.addEventListener("click", (
   $("set-stayopen").setAttribute("aria-checked", String(nxt));
   try { await window.go.app.App.SetStayOpen(nxt); }
   catch (e) { showError(e); $("set-stayopen").setAttribute("aria-checked", String(!nxt)); }
+});
+ $("set-rememberpos").addEventListener("click", async () => {
+  const st = await window.go.app.App.GetInitState();
+  const nxt = !st.config.remember_position;
+  $("set-rememberpos").setAttribute("aria-checked", String(nxt));
+  try { await window.go.app.App.SetRememberPos(nxt); }
+  catch (e) { showError(e); $("set-rememberpos").setAttribute("aria-checked", String(!nxt)); }
 });
 
 /* Irreversible uninstall — through the shared confirmation dialog. */

@@ -149,7 +149,15 @@ func main() {
                 log.Printf("[tray] stay-open toggle failed (enable=%v): %v", enable, err)
             }
         },
-        GetStayOpen: appCore.StayOpenState,        
+        GetStayOpen: appCore.StayOpenState,      
+        
+        ToggleRememberPos: func(enable bool) {
+            if err := appCore.SetRememberPos(enable); err != nil {
+                log.Printf("[tray] remember-position toggle failed (enable=%v): %v", enable, err)
+            }
+        },
+        GetRememberPos: appCore.RememberPosState,  
+        
         Quit: appCore.Quit,
     }
     trayCtl := tray.New(iconICO, iconPNG, hooks)

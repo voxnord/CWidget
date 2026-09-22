@@ -1,8 +1,9 @@
 //go:build windows
 
 // Package popup contains platform-specific window tweaks: hiding the window
-// from the taskbar, locking its size, rounding corners, tray-side positioning
-// and focus activation. All operations locate the window by its unique title.
+// from the taskbar, locking its size, rounding corners, tray-side
+// positioning (taskbar-edge aware), focus activation and position
+// persistence helpers. All operations locate the window by its unique title.
 package popup
 
 import (
@@ -16,6 +17,7 @@ var (
     user32                   = windows.NewLazySystemDLL("user32.dll")
     gdi32                    = windows.NewLazySystemDLL("gdi32.dll")
     dwmapi                   = windows.NewLazySystemDLL("dwmapi.dll")
+    shell32                  = windows.NewLazySystemDLL("shell32.dll")
     procFindWindow           = user32.NewProc("FindWindowW")
     procGetWindowLongW       = user32.NewProc("GetWindowLongW")
     procSetWindowLongW       = user32.NewProc("SetWindowLongW")
@@ -27,6 +29,12 @@ var (
     procSetWindowRgn         = user32.NewProc("SetWindowRgn")
     procCreateRoundRectRgn   = gdi32.NewProc("CreateRoundRectRgn")
     procDwmSetWindowAttr     = dwmapi.NewProc("DwmSetWindowAttribute")
+    procMonitorFromRect      = user32.NewProc("MonitorFromRect")
+    procMonitorFromPoint     = user32.NewProc("MonitorFromPoint")
+    procGetMonitorInfo       = user32.NewProc("GetMonitorInfoW")
+    procIsWindowVisible      = user32.NewProc("IsWindowVisible")
+    procGetSystemMetrics     = user32.NewProc("GetSystemMetrics")
+    procSHAppBarMessage      = shell32.NewProc("SHAppBarMessage")
 )
 
 const (
@@ -39,9 +47,6 @@ const (
     wsThickFrame           = 0x00040000 // WS_THICKFRAME: invisible resize frame
     wsMaximizeBox          = 0x00010000 // WS_MAXIMIZEBOX: allows maximize (Win+Up)
 
-    hwndTopmost   = ^uintptr(0) - 0 // HWND_TOPMOST  (-1)
-    hwndNotopmost = ^uintptr(1) - 0 // HWND_NOTOPMOST (-2)
-
     swpNoSize       = 0x0001
     swpNoMove       = 0x0002
     swpNoZOrder     = 0x0004
@@ -53,6 +58,16 @@ const (
     // Windows 11: rounding via DWM (anti-aliased).
     dwmwaCornerPref = 33
     dwmwcpRound     = 2
+
+    // Taskbar edges (Win32 ABE_* values) and SHAppBarMessage command.
+    abeLeft   = 0
+    abeTop    = 1
+    abeRight  = 2
+    abeBottom = 3
+    abmGetTaskbarPos   = 5
+
+    monitorDefaultToNull    = 0
+    monitorDefaultToNearest = 2
 
     trayMargin = 12 // margin from the work-area edges, px
 
@@ -74,6 +89,28 @@ type rect struct {
     Left, Top, Right, Bottom int32
 }
 
+type point struct {
+    X, Y int32
+}
+
+// monitorInfo layout matches the Win32 MONITORINFO (4-byte alignment only).
+type monitorInfo struct {
+    CbSize    uint32
+    RcMonitor rect
+    RcWork    rect
+    DwFlags   uint32
+}
+
+// appBarData layout matches the Win32 APPBARDATA on x64.
+type appBarData struct {
+    CbSize           uint32
+    HWnd             uintptr
+    UCallbackMessage uint32
+    UEdge            uint32
+    Rc               rect
+    LParam           uintptr
+}
+
 func utf16Ptr(s string) uintptr {
     p, err := windows.UTF16PtrFromString(s)
     if err != nil {
@@ -91,6 +128,37 @@ func windowSize(hwnd uintptr) (int32, int32) {
     var wr rect
     procGetWindowRect.Call(hwnd, uintptr(unsafe.Pointer(&wr)))
     return wr.Right - wr.Left, wr.Bottom - wr.Top
+}
+
+/* -------------------------------- taskbar -------------------------------- */
+
+// taskbarEdge detects which screen edge the (primary) taskbar is docked to.
+// SPI_GETWORKAREA alone cannot answer this — it only gives the free
+// rectangle, which is exactly why the widget used to spawn at the bottom
+// even with a top-docked taskbar.
+func taskbarEdge() int {
+    sw, _, _ := procGetSystemMetrics.Call(0) // SM_CXSCREEN
+    sh, _, _ := procGetSystemMetrics.Call(1) // SM_CYSCREEN
+
+    var ab appBarData
+    ab.CbSize = uint32(unsafe.Sizeof(ab))
+    if r, _, _ := procSHAppBarMessage.Call(abmGetTaskbarPos, uintptr(unsafe.Pointer(&ab))); r == 0 {
+        return abeBottom // query failed — assume the classic bottom taskbar
+    }
+
+    tw := ab.Rc.Right - ab.Rc.Left
+    th := ab.Rc.Bottom - ab.Rc.Top
+    if tw >= th { // horizontal taskbar
+        if int32(sh)/2 > ab.Rc.Top {
+            return abeTop
+        }
+        return abeBottom
+    }
+    // vertical taskbar
+    if int32(sw)/2 > ab.Rc.Left {
+        return abeLeft
+    }
+    return abeRight
 }
 
 /* -------------------------------- taskbar -------------------------------- */
@@ -136,28 +204,132 @@ func LockResize(title string) {
 
 /* ------------------------------- position -------------------------------- */
 
-// MoveNearTray places the window in the bottom-right corner of the work area
-// — the standard position for tray popups (like Windows notifications).
+// CornerPosForSize computes the default popup position for a window of the
+// given size: the work-area corner NEAREST TO THE TRAY. The notification
+// area sits at the bottom of horizontal taskbars and at the bottom of
+// left-docked ones, hence the mapping below. Works for any taskbar edge.
+func CornerPosForSize(w, h int) (int, int, bool) {
+    var wa rect
+    procSystemParametersInfo.Call(spiGetWorkArea, 0, uintptr(unsafe.Pointer(&wa)), 0)
+    if wa.Right <= wa.Left || wa.Bottom <= wa.Top {
+        return 0, 0, false
+    }
+    var x, y int32
+    switch taskbarEdge() {
+    case abeTop: // tray at the top -> top-right corner, below the taskbar
+        x = wa.Right - int32(w) - trayMargin
+        y = wa.Top + trayMargin
+    case abeLeft: // tray at the bottom of the left dock -> bottom-left
+        x = wa.Left + trayMargin
+        y = wa.Bottom - int32(h) - trayMargin
+    default: // abeBottom and abeRight -> bottom-right corner
+        x = wa.Right - int32(w) - trayMargin
+        y = wa.Bottom - int32(h) - trayMargin
+    }
+    return int(x), int(y), true
+}
+
+// MoveNearTray places the window at the tray-side corner for its current
+// size (taskbar-edge aware).
 func MoveNearTray(title string) {
     hwnd := findHwnd(title)
     if hwnd == 0 {
         return
     }
     w, h := windowSize(hwnd)
-    if w <= 0 || h <= 0 {
+    x, y, ok := CornerPosForSize(int(w), int(h))
+    if !ok {
         return
     }
-    var wa rect
-    procSystemParametersInfo.Call(spiGetWorkArea, 0, uintptr(unsafe.Pointer(&wa)), 0)
-    if wa.Right <= wa.Left || wa.Bottom <= wa.Top {
-        return
-    }
-    x := wa.Right - w - trayMargin
-    y := wa.Bottom - h - trayMargin
-    procSetWindowPos.Call(hwnd,
-        0, // HWND_NOTOPMOST
+    procSetWindowPos.Call(hwnd, 0,
         uintptr(x), uintptr(y), 0, 0,
         swpNoSize|swpNoZOrder|swpNoActivate)
+}
+
+/* ------------------------- position persistence --------------------------- */
+
+// GetWindowPos returns the current absolute window position
+// (virtual-screen coordinates: negative X = a monitor to the left,
+// X > primary width = a monitor to the right).
+func GetWindowPos(title string) (int, int, bool) {
+    hwnd := findHwnd(title)
+    if hwnd == 0 {
+        return 0, 0, false
+    }
+    var wr rect
+    procGetWindowRect.Call(hwnd, uintptr(unsafe.Pointer(&wr)))
+    return int(wr.Left), int(wr.Top), true
+}
+
+// SetWindowPosAbs restores an absolute position. Multi-monitor safe: the
+// target rectangle is checked with MonitorFromRect(MONITOR_DEFAULTTONULL) —
+// if it does not intersect ANY monitor (the monitor was disconnected since
+// the save), the call reports false and the caller falls back to the
+// default placement instead of losing the window off-screen.
+func SetWindowPosAbs(title string, x, y int) bool {
+    hwnd := findHwnd(title)
+    if hwnd == 0 {
+        return false
+    }
+    w, h := windowSize(hwnd)
+    if w <= 0 || h <= 0 {
+        return false
+    }
+    target := rect{Left: int32(x), Top: int32(y), Right: int32(x) + w, Bottom: int32(y) + h}
+    mon, _, _ := procMonitorFromRect.Call(uintptr(unsafe.Pointer(&target)), monitorDefaultToNull)
+    if mon == 0 {
+        return false
+    }
+    procSetWindowPos.Call(hwnd, 0,
+        uintptr(x), uintptr(y), 0, 0,
+        swpNoSize|swpNoZOrder|swpNoActivate)
+    return true
+}
+
+// FitToWorkArea clamps a window of w×h anchored at x,y so it fully fits into
+// the work area of the monitor that anchor belongs to. Used for the taller
+// settings view: it must never dive under the taskbar (any taskbar edge) or
+// off the screen. The monitor is resolved from an anchor POINT — unambiguous
+// even when the taller frame straddles two monitors.
+func FitToWorkArea(x, y, w, h int) (int, int, bool) {
+    pt := point{X: int32(x + 20), Y: int32(y + 20)}
+    // POINT is passed BY VALUE on x64: pack both int32 halves into one register.
+    packed := uintptr(uint32(pt.X)) | uintptr(uint32(pt.Y))<<32
+    mon, _, _ := procMonitorFromPoint.Call(packed, monitorDefaultToNearest)
+    if mon == 0 {
+        return 0, 0, false
+    }
+    var mi monitorInfo
+    mi.CbSize = uint32(unsafe.Sizeof(mi))
+    if r, _, _ := procGetMonitorInfo.Call(mon, uintptr(unsafe.Pointer(&mi))); r == 0 {
+        return 0, 0, false
+    }
+    nx, ny := int32(x), int32(y)
+    if maxX := mi.RcWork.Right - int32(w); nx > maxX {
+        nx = maxX
+    }
+    if nx < mi.RcWork.Left {
+        nx = mi.RcWork.Left
+    }
+    if maxY := mi.RcWork.Bottom - int32(h); ny > maxY {
+        ny = maxY
+    }
+    if ny < mi.RcWork.Top {
+        ny = mi.RcWork.Top
+    }
+    return int(nx), int(ny), true
+}
+
+// IsWindowVisible reports whether the window is currently shown. Used by the
+// position watcher so that hidden windows (blur-hide, the close button)
+// never trigger a save.
+func IsWindowVisible(title string) bool {
+    hwnd := findHwnd(title)
+    if hwnd == 0 {
+        return false
+    }
+    r, _, _ := procIsWindowVisible.Call(hwnd)
+    return r != 0
 }
 
 /* ------------------------------- rounding -------------------------------- */
@@ -167,8 +339,6 @@ func MoveNearTray(title string) {
 // Windows 10 — no system support (DWM rejects the attribute), so the window
 // is clipped with a SetWindowRgn region; the edge has no anti-aliasing —
 // a Win10 limitation — hence the slightly smaller radius (see cornerNum).
-// The region is computed from the actual RECT: it is recomputed after a mode
-// (window size) change; the call is idempotent.
 func RoundCorners(title string) {
     hwnd := findHwnd(title)
     if hwnd == 0 {
@@ -214,8 +384,7 @@ func applyRegion(hwnd uintptr) {
 
 /* -------------------------------- focus ---------------------------------- */
 
-// FocusWindow activates the window (focus + foreground). Wails v2 has no
-// equivalent (WindowFocus appeared only in v3), hence Win32. Best-effort:
+// FocusWindow activates the window (focus + foreground). Best-effort:
 // Windows restricts foreground transfers to "foreign" processes, but the
 // process owning the tray icon the user just clicked is allowed to do this.
 func FocusWindow(title string) {
@@ -225,23 +394,4 @@ func FocusWindow(title string) {
     }
     procShowWindow.Call(hwnd, swRestore) // restore if minimized
     procSetForegroundWindow.Call(hwnd)
-}
-
-/* ------------------------------- topmost --------------------------------- */
-
-// SetTopmost toggles the WS_EX_TOPMOST style (always on top). A hidden
-// window does not need the style: ShowMode re-applies it on every show.
-// Best-effort like the rest of the package.
-func SetTopmost(title string, enable bool) {
-    hwnd := findHwnd(title)
-    if hwnd == 0 {
-        return
-    }
-    if enable {
-        procSetWindowPos.Call(hwnd, hwndTopmost, 0, 0, 0, 0,
-            swpNoSize|swpNoMove|swpNoActivate)
-        return
-    }
-    procSetWindowPos.Call(hwnd, hwndNotopmost, 0, 0, 0, 0,
-        swpNoSize|swpNoMove|swpNoActivate)
 }

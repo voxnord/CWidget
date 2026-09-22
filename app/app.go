@@ -2,7 +2,8 @@
 // frontend bindings together. Methods are split across files by responsibility:
 // window.go — window presentation, refresh.go — rates updates and cooldowns,
 // settings.go — the frontend-facing API, ticker.go — the background timer,
-// log.go — the panic shield and the log-file writer.
+// position.go — window position persistence, log.go — the panic shield and
+// the log-file writer.
 package app
 
 import (
@@ -23,7 +24,7 @@ import (
 //
 //	-ldflags "-X <module>/app.Version=1.2.3"
 //
-// The value "dev" means the app was TrayBridgerted from sources (wails dev / go run).
+// The value "dev" means the app was started from sources (wails dev / go run).
 var Version = "dev"
 
 // WindowTitle is the unique window title. It is set from main.go BEFORE
@@ -35,7 +36,8 @@ var WindowTitle string
 type TrayBridge interface {
     SetUpdatedLabel(at time.Time)
     SetAutoState(on bool)
-    SetStayOpenState(on bool) // keep the tray checkbox in sync with the config
+    SetStayOpenState(on bool)
+    SetRememberPosState(on bool)
     SetBusy(busy bool)
     Cooldown(d time.Duration)
     NotifyFailure(reason string)
@@ -84,9 +86,16 @@ type App struct {
     cooldownUntil atomic.Int64 // unix time of the cooldown end
     stale         atomic.Bool  // "offline": the last refresh attempt failed completely
     failures      atomic.Int64 // consecutive full failures (drives the backoff)
+    shownOnce     atomic.Bool  // the window has been shown at least once this session
+    curMode       atomic.Value // current window mode ("main" | "settings"); the position watcher persists only in "main"
 
     retryMu    sync.Mutex
     retryTimer *time.Timer // the scheduled backoff retry (at most one)
+
+    posMu        sync.Mutex
+    posInit      bool        // first position observation already anchored
+    posX, posY   int         // last seen position (the debounced save source)
+    posSaveTimer *time.Timer // debounce for position writes
 
     stopMu sync.Mutex
     stopCh chan struct{}
@@ -103,6 +112,7 @@ func (a *App) SetTray(tb TrayBridge) { a.trayB = tb }
 func (a *App) Startup(ctx context.Context) {
     a.ctx = ctx
     a.startTicker()
+    a.startPositionWatcher()
     go a.BackgroundRefresh(false) // warm-up, no cooldown
 }
 

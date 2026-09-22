@@ -22,6 +22,8 @@ type Hooks struct {
     GetAutoStart    func() bool // the actual OS state, polled when the menu is built
     ToggleStayOpen  func(enable bool)
     GetStayOpen     func() bool // the actual config state, polled when the menu is built
+    ToggleRememberPos func(enable bool)
+    GetRememberPos    func() bool // the actual config state, polled when the menu is built    
     SetLanguage     func(code string)
     Quit            func()
 }
@@ -32,16 +34,19 @@ type Tray struct {
     hooks   Hooks
     autoOn  bool // local checkbox states (seeded from the sources of truth)
     stayOn  bool
+    rposOn  bool
 
     mOpen     *systray.MenuItem
     mRefresh  *systray.MenuItem
     mAuto     *systray.MenuItem
     mOnTop    *systray.MenuItem
+    mRPos     *systray.MenuItem
     mSettings *systray.MenuItem
     mQuit     *systray.MenuItem
     mLang     *systray.MenuItem
     langItems map[string]*systray.MenuItem
 
+    
     mu            sync.RWMutex  // RWMutex: applyTooltip reads under RLock, writers use Lock
     lastUpdate    time.Time     // moment of the last successful refresh
     cooldownUntil time.Time     // until when the refresh item is blocked
@@ -116,11 +121,16 @@ func (t *Tray) onReady() {
     if t.hooks.GetStayOpen != nil {
         t.stayOn = t.hooks.GetStayOpen()
     }
+    t.rposOn = false
+    if t.hooks.GetRememberPos != nil {
+        t.rposOn = t.hooks.GetRememberPos()
+    }
 
     t.mOpen = systray.AddMenuItem(i18n.T("tray.open"), i18n.T("tray.open.tip"))
     t.mRefresh = systray.AddMenuItem(t.refreshTitle(), i18n.T("tray.refresh.tip"))
     systray.AddSeparator()
     t.mOnTop = systray.AddMenuItemCheckbox(i18n.T("tray.ontop"), i18n.T("tray.ontop.tip"), t.stayOn)
+    t.mRPos = systray.AddMenuItemCheckbox(i18n.T("tray.rpos"), i18n.T("tray.rpos.tip"), t.rposOn)
     t.mAuto = systray.AddMenuItemCheckbox(i18n.T("tray.autostart"), i18n.T("tray.autostart.tip"), t.autoOn)
     t.mSettings = systray.AddMenuItem(i18n.T("tray.settings"), i18n.T("tray.settings.tip"))
 
@@ -165,6 +175,15 @@ func (t *Tray) onReady() {
             }
         })
     })
+    t.mRPos.Click(func() {
+        safeGo("rememberpos-toggle", func() {
+            t.rposOn = !t.rposOn
+            if t.hooks.ToggleRememberPos != nil {
+                t.hooks.ToggleRememberPos(t.rposOn)
+            }
+        })
+    })
+
 }
 
 func onClick(what string, m *systray.MenuItem, fn func()) {
@@ -262,6 +281,18 @@ func (t *Tray) SetStayOpenState(on bool) {
     }
 }
 
+// SetRememberPosState pins the remember-position checkbox to the fact.
+func (t *Tray) SetRememberPosState(on bool) {
+    t.rposOn = on
+    if t.mRPos != nil {
+        if on {
+            t.mRPos.Check()
+        } else {
+            t.mRPos.Uncheck()
+        }
+    }
+}
+
 // Retranslate translates all menu items and the tooltip to the current
 // i18n language. Idempotent.
 func (t *Tray) Retranslate() {
@@ -284,6 +315,8 @@ func (t *Tray) Retranslate() {
 
     t.mOnTop.SetTitle(i18n.T("tray.ontop"))
     t.mOnTop.SetTooltip(i18n.T("tray.ontop.tip"))
+    t.mRPos.SetTitle(i18n.T("tray.rpos"))
+    t.mRPos.SetTooltip(i18n.T("tray.rpos.tip"))
     t.mAuto.SetTitle(i18n.T("tray.autostart"))
     t.mAuto.SetTooltip(i18n.T("tray.autostart.tip"))
     t.mSettings.SetTitle(i18n.T("tray.settings"))

@@ -100,6 +100,34 @@ func (a *App) SetStayOpen(enable bool) error {
     return nil
 }
 
+// RememberPosState exposes the remember-position flag to the tray hooks:
+// the context menu seeds its checkbox from it at build time.
+func (a *App) RememberPosState() bool {
+    a.cfgMu.Lock()
+    defer a.cfgMu.Unlock()
+    return a.cfg.RememberPos
+}
+
+// SetRememberPos toggles the position persistence. Applied immediately:
+// while enabled, the watcher saves the window position on drag; on the next
+// show the saved position is restored (multi-monitor validated).
+func (a *App) SetRememberPos(enable bool) error {
+    a.cfgMu.Lock()
+    a.cfg.RememberPos = enable
+    saveErr := config.Save(a.cfg)
+    a.cfgMu.Unlock()
+    if saveErr != nil {
+        return saveErr
+    }
+    if a.trayB != nil {
+        a.trayB.SetRememberPosState(enable)
+    }
+    if a.ctx != nil {
+        runtime.EventsEmit(a.ctx, "rememberpos:changed", enable)
+    }
+    return nil
+}
+
 // SetFavorites replaces the global favorites list. Favorites are
 // provider-agnostic ISO codes; availability filtering happens at render
 // time, so nothing here needs to know about providers.
@@ -229,33 +257,24 @@ func (a *App) SetAutoStart(enable bool) error {
 }
 
 // Uninstall removes the autostart entry, schedules the deletion of the app
-// data folder and the executable (see uninstall_windows.go /
-// uninstall_linux.go for the detached-cleanup trick) and quits.
-// The frontend confirms first — this is irreversible.
-//
-// ORDER MATTERS: schedule everything FIRST, quit LAST. The previous version
-// quit before scheduling — the process raced its own exit: the script file
-// and the RunOnce entry were written, but the detached cmd was never
-// spawned, and the spawn error drowned with the dying app.
+// data folder and the executable (see uninstall_windows.go / uninstall_linux.go
+// for the detached-cleanup trick) and quits. The frontend confirms first —
+// this is irreversible.
 func (a *App) Uninstall() error {
     log.Printf("[app] uninstall requested")
     _ = autostartDisable()
     exe, err := os.Executable()
     if err != nil {
-        log.Printf("[app] uninstall: cannot resolve the executable: %v", err)
         return err
     }
     dataDir, err := config.Dir()
     if err != nil {
-        log.Printf("[app] uninstall: cannot resolve the data dir: %v", err)
         return err
     }
-    if err := runSelfUninstall(dataDir, exe); err != nil {
-        // runSelfUninstall logs the details itself; the app stays alive so
-        // the user sees the error and can retry.
-        return err
-    }
-    log.Printf("[app] cleanup scheduled — quitting now")
     a.Quit()
+    if err := runSelfUninstall(dataDir, exe); err != nil {
+        log.Printf("[app] self-uninstall scheduling failed: %v", err)
+        return err
+    }
     return nil
 }

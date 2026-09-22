@@ -16,16 +16,20 @@ const (
 
 // Config holds all persisted settings.
 type Config struct {
-    Base       string   `json:"base_currency"`                // default left currency
-    Target     string   `json:"target_currency"`              // default right currency
-    AutoStart  bool     `json:"autostart"`                    // mirror only; the OS is the source of truth
-    RefreshMin int      `json:"refresh_interval_minutes"`     // background polling period
-    Provider   string   `json:"provider,omitempty"`           // selected rates source (key)
-    Theme      string   `json:"theme,omitempty"`              // "dark" | "light"
-    Language   string   `json:"language,omitempty"`           // language code ("ru", "en", ...)
-    StayOpen   bool     `json:"stay_open"`                    // keep the window open on focus loss (and keep it on top while visible)
-    Favorites  []string `json:"favorites,omitempty"`          // favorite currency codes (global, provider-agnostic)
-    Priority   []string `json:"providers_priority,omitempty"` // provider registration order
+    Base        string   `json:"base_currency"`                // default left currency
+    Target      string   `json:"target_currency"`              // default right currency
+    AutoStart   bool     `json:"autostart"`                    // mirror only; the OS is the source of truth
+    RefreshMin  int      `json:"refresh_interval_minutes"`     // background polling period
+    Provider    string   `json:"provider,omitempty"`           // selected rates source (key)
+    Theme       string   `json:"theme,omitempty"`              // "dark" | "light"
+    Language    string   `json:"language,omitempty"`           // language code ("ru", "en", ...)
+    StayOpen    bool     `json:"stay_open"`                    // keep the window open on focus loss (on top while visible)
+    RememberPos bool     `json:"remember_position"`            // restore the last dragged window position
+    HasPos      bool     `json:"has_pos,omitempty"`            // a position worth restoring exists
+    PosX        int      `json:"pos_x,omitempty"`              // absolute virtual-screen coordinates
+    PosY        int      `json:"pos_y,omitempty"`              // (multi-monitor aware)
+    Favorites   []string `json:"favorites,omitempty"`          // favorite currency codes (global, provider-agnostic)
+    Priority    []string `json:"providers_priority,omitempty"` // provider registration order
 }
 
 // Dir returns the application data directory (%AppData%/Voxs_CurrencyWidget).
