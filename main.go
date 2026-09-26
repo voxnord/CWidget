@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+	_ "time/tzdata" // embedded tz database: Europe/Berlin for the ECB chase on end-user machines
 
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"

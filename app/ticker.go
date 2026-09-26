@@ -2,7 +2,11 @@ package app
 
 import "time"
 
-/* -------------------------------- ticker --------------------------------- */
+/* -------------------------------- ticker ---------------------------------
+ * Scheduling is delegated to the manager: NextTick returns the sooner of
+ * the regular interval and a publication-chase moment (see
+ * rates.PublicationAware). The schedule is recomputed after every tick, so
+ * a landed publication naturally reverts the cadence to the interval. */
 
 func (a *App) startTicker() {
     a.stopMu.Lock()
@@ -12,12 +16,15 @@ func (a *App) startTicker() {
     }
     a.stopCh = make(chan struct{})
     ch := a.stopCh
-    // Panic shield: an uncaught panic here would end this goroutine —
-    // automatic refresh would die silently for the rest of the process life.
     go Safe("ticker", func() {
         for {
-            d := time.Duration(a.intervalMin()) * time.Minute
-            t := time.NewTimer(d)
+            interval := time.Duration(a.intervalMin()) * time.Minute
+            next := a.ratesM.NextTick(time.Now(), interval)
+            wait := time.Until(next)
+            if wait < time.Minute {
+                wait = time.Minute // safety: never spin
+            }
+            t := time.NewTimer(wait)
             select {
             case <-ch:
                 t.Stop()

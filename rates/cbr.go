@@ -86,3 +86,28 @@ func (c *CBR) Fetch(ctx context.Context) (*Table, error) {
         Names:     names,
     }, nil
 }
+
+// msk is Moscow time as a fixed zone: MSK is UTC+3 year-round (no DST since
+// 2014), so no tzdata database is required.
+var msk = time.FixedZone("MSK", 3*3600)
+
+// NextPublication implements rates.PublicationAware. The CBR sets official
+// rates once per WORKING day at ~15:30 MSK (session results); the mirror
+// lags slightly, hence 15:45 MSK. The rate set on day D is valid from D+1 —
+// exactly the QuoteDate flip the manager chases. Weekends are skipped
+// (Friday's publication covers them).
+func (c *CBR) NextPublication(after time.Time) time.Time {
+    t := after.In(msk)
+    for i := 0; i < 10; i++ {
+        cand := time.Date(t.Year(), t.Month(), t.Day(), 15, 45, 0, 0, msk)
+        if !cand.After(t) {
+            cand = cand.AddDate(0, 0, 1)
+        }
+        if wd := cand.Weekday(); wd == time.Saturday || wd == time.Sunday {
+            t = cand // candidate is a weekend: advance and recompute
+            continue
+        }
+        return cand
+    }
+    return after.Add(24 * time.Hour)
+}

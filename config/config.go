@@ -79,7 +79,7 @@ func Load() (*Config, error) {
 }
 
 func Default() *Config {
-    return &Config{Base: "RUB", Target: "KZT", RefreshMin: 60}
+    return &Config{Base: "RUB", Target: "KZT", RefreshMin: 180}
 }
 
 // NormalizeFavorites uppercases, validates (3 letters A-Z) and deduplicates
@@ -121,6 +121,13 @@ func sanitize(c *Config) {
     // Language validity is checked by i18n in main.go (the config package
     // must not know about it).
     c.Favorites = NormalizeFavorites(c.Favorites)
+    // The default interval is 180 min: official rates are published once a
+    // day (~15:30 MSK for the CBR), so polling every hour buys nothing.
+    // Existing configs keep their value — only NEW configs get this default
+    // (RefreshMin is zero in a fresh Default() and is set right after).
+    if c.RefreshMin == 0 {
+        c.RefreshMin = 180
+    }
     if c.RefreshMin < 5 {
         c.RefreshMin = 5
     }

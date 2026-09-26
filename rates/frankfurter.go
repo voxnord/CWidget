@@ -101,3 +101,32 @@ func (f *Frankfurter) Fetch(ctx context.Context) (*Table, error) {
         Names:     names,
     }, nil
 }
+
+var berlin = mustBerlin()
+
+func mustBerlin() *time.Location {
+    loc, err := time.LoadLocation("Europe/Berlin")
+    if err != nil {
+        return time.FixedZone("CET", 3600) // crude fallback; tzdata is embedded anyway
+    }
+    return loc
+}
+
+// NextPublication implements rates.PublicationAware: ECB reference rates are
+// published once per working day at ~16:00 Europe/Berlin. TARGET holidays
+// are not modeled — a missed chase just falls back to the regular interval.
+func (f *Frankfurter) NextPublication(after time.Time) time.Time {
+    t := after.In(berlin)
+    for i := 0; i < 10; i++ {
+        cand := time.Date(t.Year(), t.Month(), t.Day(), 16, 0, 0, 0, berlin)
+        if !cand.After(t) {
+            cand = cand.AddDate(0, 0, 1)
+        }
+        if wd := cand.Weekday(); wd == time.Saturday || wd == time.Sunday {
+            t = cand
+            continue
+        }
+        return cand
+    }
+    return after.Add(24 * time.Hour)
+}
