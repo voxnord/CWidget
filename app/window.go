@@ -10,17 +10,23 @@ import (
 
 /* ----------------------------- window presentation ----------------------- */
 
-// showMu serializes ShowMode: a second show request while one is still in
-// flight is dropped instead of stacking up on the UI threads. TryLock keeps
-// the tray responsive even if a show call hangs below.
 var showMu sync.Mutex
 
-// ShowMode is the single presentation entry point: size per mode, position
-// (remembered for the widget; clamped for the taller settings view),
-// corner rounding for the actual size, focus, and the always-on-top state
-// per the stay-open mode.
+// ShowMode is the single presentation entry point.
 func (a *App) ShowMode(mode string) {
     Safe("window.ShowMode("+mode+")", func() { a.showMode(mode) })
+}
+
+// modeWindowSize returns the window size for a presentation mode. The
+// backend is the single source of truth for sizes: the frontend layout is
+// built to fit these. Tune here — one place per mode.
+func modeWindowSize(mode string) (int, int) {
+    switch mode {
+    case "settings":
+        return 380, 590
+    default: // "main" and any future mode
+        return 380, 300
+    }
 }
 
 func (a *App) showMode(mode string) {
@@ -34,35 +40,32 @@ func (a *App) showMode(mode string) {
     defer showMu.Unlock()
 
     log.Printf("[window] ShowMode(%s): enter", mode)
-    w, h := 380, 300
-    if mode == "settings" {
-        w, h = 380, 600
-    }
+    w, h := modeWindowSize(mode)
     runtime.WindowSetSize(a.ctx, w, h)
     log.Printf("[window] ShowMode(%s): size set", mode)
 
-    a.cfgMu.Lock()
-    remember := a.cfg.RememberPos
-    hasPos, px, py := a.cfg.HasPos, a.cfg.PosX, a.cfg.PosY
-    a.cfgMu.Unlock()
-
     // Positioning model: the SAVED position belongs to the widget (main
-    // window). The settings view is a taller, transient view of the same
-    // anchor — it is clamped into the work area so it never dives under the
-    // taskbar (any taskbar edge) or off the screen. Clamped settings
-    // coordinates are never persisted (the watcher saves only in main mode).
+    // window) and is applied EXACTLY as saved — no clamping. That is
+    // deliberate user placement; the known trade-off is that if the
+    // taskbar edge changes after the save, the widget may end up partially
+    // under the panel. The settings view is a taller, transient view of
+    // the same anchor — clamped into the work area so it never dives under
+    // the taskbar. Clamped settings coordinates are never persisted.
+    hasPos, px, py := a.rememberedPos()
     placed := false
-    if remember && hasPos {
+    if a.rememberPos() && hasPos {
         switch mode {
         case "main":
             placed = popup.SetWindowPosAbs(WindowTitle, px, py)
-        default: // settings
+        case "settings":
             if fx, fy, ok := popup.FitToWorkArea(px, py, w, h); ok {
                 placed = popup.SetWindowPosAbs(WindowTitle, fx, fy)
                 if placed && (fx != px || fy != py) {
-                    log.Printf("[window] settings anchored at (%d,%d) clamped to (%d,%d) to fit the work area", px, py, fx, fy)
+                    log.Printf("[window] settings anchored at (%d,%d) clamped to (%d,%d)", px, py, fx, fy)
                 }
             }
+        default:
+            // unknown mode — never guess the positioning branch
         }
         if !placed {
             log.Printf("[window] saved position (%d,%d) unavailable — falling back to tray", px, py)
@@ -71,19 +74,17 @@ func (a *App) showMode(mode string) {
     if !placed {
         popup.MoveNearTray(WindowTitle) // taskbar-edge aware
     }
-    popup.RoundCorners(WindowTitle) // the region depends on the size — after the resize
+    popup.RoundCorners(WindowTitle)
     log.Printf("[window] ShowMode(%s): positioned", mode)
 
-    a.cfgMu.Lock()
-    stayOpen := a.cfg.StayOpen
-    a.cfgMu.Unlock()
+    stayOpen := a.stayOpen()
 
     runtime.WindowUnminimise(a.ctx)
     runtime.WindowShow(a.ctx)
     runtime.WindowSetAlwaysOnTop(a.ctx, stayOpen)
     popup.FocusWindow(WindowTitle)
-    a.shownOnce.Store(true) // the position watcher starts persisting from now on
-    a.curMode.Store(mode)   // set AFTER the move: no transient positions are ever persisted
+    a.shownOnce.Store(true)
+    a.curMode.Store(mode)
     log.Printf("[window] ShowMode(%s): shown (topmost=%v)", mode, stayOpen)
 
     runtime.EventsEmit(a.ctx, "ui:mode", mode)

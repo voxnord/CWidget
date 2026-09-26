@@ -31,17 +31,12 @@ type Table struct {
     Names     map[string]string    `json:"names,omitempty"` // code -> human-readable name
 }
 
-// Has reports whether all listed codes are present in the table.
-func (t *Table) Has(codes ...string) bool {
-    if t == nil {
-        return false
-    }
-    for _, c := range codes {
-        if _, ok := t.Points[c]; !ok {
-            return false
-        }
-    }
-    return true
+// IsFallback reports whether this snapshot came from a provider other than
+// the selected one (the data is degraded: a fallback answered). Kept on the
+// data type so the "who decides what a fallback is" rule lives with the
+// data, not in every caller.
+func (t *Table) IsFallback(preferredKey string) bool {
+    return t != nil && t.SourceKey != "" && preferredKey != "" && t.SourceKey != preferredKey
 }
 
 // Pair returns the "how many units of to per 1 from" rate, today and yesterday.

@@ -58,7 +58,7 @@
   "uninstall.no": "Cancel",
   "ui.close": "Close",
   "ui.search": "Search",
-  "settings.stay_open": "Keep the window open when clicking outside (on top)",
+  "settings.stay_open": "Always on top",
   "fav.add": "Add to favorites",
   "fav.remove": "Remove from favorites",
   "settings.save": "Save",

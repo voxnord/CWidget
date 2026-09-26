@@ -144,14 +144,6 @@ func (a *App) startCooldown(d time.Duration) {
     }
 }
 
-// isFallback reports that data came from the fallback instead of the selected
-// provider. An empty SourceKey (a disk cache written by an older build) does
-// NOT count as degraded: the manager stamps the key on the first successful
-// refresh.
-func isFallback(tbl *rates.Table, preferred string) bool {
-    return tbl != nil && tbl.SourceKey != "" && preferred != "" && tbl.SourceKey != preferred
-}
-
 // publish distributes a refresh result: an event to the frontend plus tray
 // synchronization (updated-at label, degraded and offline states).
 func (a *App) publish(tbl *rates.Table, err error) {
@@ -174,7 +166,7 @@ func (a *App) publish(tbl *rates.Table, err error) {
         Table:    tbl,
         Names:    a.ratesM.Names(),
         Provider: preferred,
-        Fallback: isFallback(tbl, preferred),
+        Fallback: tbl.IsFallback(preferred),
     }
     log.Printf("[rates] refreshed from %q (fallback=%v, quotes=%s, at=%s)",
         tbl.Source, payload.Fallback, tbl.QuoteDate, tbl.FetchedAt.Local().Format("15:04:05"))

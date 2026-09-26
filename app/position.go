@@ -8,21 +8,12 @@ import (
 	"github.com/voxnord/cwidget/popup"
 )
 
-/* Window position persistence.
- *
- * A lightweight watcher polls the window position while it is visible AND
- * the window is in MAIN mode, saving it (debounced) into the config, so it
- * survives restarts and autostart. On show the saved coordinates are
- * restored — validated against the visible monitors first (multi-monitor
- * safe: if the monitor is gone, the default tray-corner placement is used).
- *
- * Two guards keep the saved position honest:
- *   - "only when visible": a hidden window never triggers a save, so the
- *     default (tray-corner) placement after autostart cannot overwrite the
- *     user's spot;
- *   - "only in main mode": the settings view is clamped to fit the work
- *     area, and those clamped coordinates must never be mistaken for the
- *     user's chosen widget position. */
+/* Window position persistence. The watcher polls the window position while
+ * it is visible AND in MAIN mode, saving it (debounced) into the config. On
+ * show the saved coordinates are restored, validated against the visible
+ * monitors first. Guards keep the saved position honest: hidden windows and
+ * the clamped settings view never trigger a save. The watcher is started/
+ * stopped with the RememberPos toggle (setWatcherRunning). */
 
 const (
     posPollInterval = 800 * time.Millisecond
@@ -30,28 +21,54 @@ const (
 )
 
 func (a *App) startPositionWatcher() {
+    a.watcherMu.Lock()
+    defer a.watcherMu.Unlock()
+    if a.watcherStop != nil {
+        return
+    }
+    stop := make(chan struct{})
+    a.watcherStop = stop
     go Safe("position-watcher", func() {
         t := time.NewTicker(posPollInterval)
         defer t.Stop()
-        for range t.C {
-            a.pollPosition()
+        for {
+            select {
+            case <-stop:
+                return
+            case <-t.C:
+                a.pollPosition()
+            }
         }
     })
 }
 
+func (a *App) stopPositionWatcher() {
+    a.watcherMu.Lock()
+    defer a.watcherMu.Unlock()
+    if a.watcherStop != nil {
+        close(a.watcherStop)
+        a.watcherStop = nil
+    }
+}
+
+// setWatcherRunning starts/stops the watcher according to the toggle.
+func (a *App) setWatcherRunning(run bool) {
+    if run {
+        a.startPositionWatcher()
+    } else {
+        a.stopPositionWatcher()
+    }
+}
+
 func (a *App) pollPosition() {
-    a.cfgMu.Lock()
-    enabled := a.cfg.RememberPos
-    a.cfgMu.Unlock()
-    if !enabled || !a.shownOnce.Load() {
+    if !a.rememberPos() || !a.shownOnce.Load() {
         return
     }
-    // Persist only the widget (main mode) position.
     if m, _ := a.curMode.Load().(string); m != "main" {
         return
     }
     if !popup.IsWindowVisible(WindowTitle) {
-        return // hidden windows do not move; skip entirely
+        return
     }
     x, y, ok := popup.GetWindowPos(WindowTitle)
     if !ok {
@@ -61,10 +78,7 @@ func (a *App) pollPosition() {
     a.posMu.Lock()
     defer a.posMu.Unlock()
     if !a.posInit {
-        // First observation of this session: anchor the baseline WITHOUT
-        // writing the config — otherwise whatever default placement the
-        // window got would overwrite the user's saved position.
-        a.posInit = true
+        a.posInit = true // anchor the baseline; the default placement is not a user choice
         a.posX, a.posY = x, y
         return
     }
@@ -81,16 +95,13 @@ func (a *App) pollPosition() {
 }
 
 func (a *App) savePosition(x, y int) {
-    a.cfgMu.Lock()
-    if !a.cfg.RememberPos {
-        a.cfgMu.Unlock()
-        return
-    }
-    a.cfg.HasPos = true
-    a.cfg.PosX, a.cfg.PosY = x, y
-    err := config.Save(a.cfg)
-    a.cfgMu.Unlock()
-    if err != nil {
+    if err := a.saveConfig(func(c *config.Config) {
+        if !c.RememberPos {
+            return // the toggle was switched off mid-drag
+        }
+        c.HasPos = true
+        c.PosX, c.PosY = x, y
+    }); err != nil {
         log.Printf("[window] position save failed: %v", err)
     }
 }

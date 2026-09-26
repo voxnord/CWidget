@@ -3,7 +3,6 @@ package app
 import (
 	"errors"
 	"log"
-	"os"
 	"strings"
 	"time"
 
@@ -12,12 +11,15 @@ import (
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
-/* --------------------------- frontend-facing API ------------------------- */
+/* --------------------------- frontend-facing API -------------------------
+ * Every setter follows the same shape: mutate via saveConfig (one place
+ * owns the lock and the persist), then emit side effects (frontend event,
+ * tray sync, ticker restart). Side effects NEVER happen when the persist
+ * failed — a saved-to-disk lie is worse than a stale UI. */
 
 func (a *App) GetInitState() InitPayload {
-    a.cfgMu.Lock()
-    cfgCopy := *a.cfg
-    a.cfgMu.Unlock()
+    var cfgCopy config.Config
+    a.readConfig(func(c *config.Config) { cfgCopy = *c })
     tbl, _ := a.ratesM.Current()
     pref := a.ratesM.Preferred()
 
@@ -42,53 +44,34 @@ func (a *App) GetInitState() InitPayload {
             Table:    tbl,
             Names:    a.ratesM.Names(),
             Provider: pref,
-            Fallback: isFallback(tbl, pref),
+            Fallback: tbl.IsFallback(pref),
         },
     }
 }
 
-// SetProvider switches the rates source. It is generic: it works with any key
-// present in the manager registry and requires zero per-provider code.
-// Errors are returned as localization KEYS ("err.xxx[|arg]"), the frontend
-// translates them.
+// SetProvider switches the rates source. Generic: works with any key present
+// in the manager registry; errors are localization KEYS ("err.xxx[|arg]").
 func (a *App) SetProvider(key string) error {
     key = strings.ToLower(strings.TrimSpace(key))
     if !a.ratesM.HasKey(key) {
         return errors.New("err.provider_unknown|" + key)
     }
-    a.cfgMu.Lock()
-    a.cfg.Provider = key
-    saveErr := config.Save(a.cfg)
-    a.cfgMu.Unlock()
-    if saveErr != nil {
-        return saveErr
+    if err := a.saveConfig(func(c *config.Config) { c.Provider = key }); err != nil {
+        return err
     }
     a.ratesM.SetPreferred(key)
-    // Fetch the new source immediately (with a cooldown — protection against
-    // "scroll the list and storm the APIs").
+    // Fetch the new source immediately (with a cooldown — protection
+    // against "scroll the list and storm the APIs").
     go a.BackgroundRefresh(true)
     return nil
 }
 
-// StayOpenState exposes the stay-open flag to the tray hooks: the context
-// menu seeds its checkbox from it at build time.
-func (a *App) StayOpenState() bool {
-    a.cfgMu.Lock()
-    defer a.cfgMu.Unlock()
-    return a.cfg.StayOpen
-}
+func (a *App) StayOpenState() bool { return a.stayOpen() }
 
-// SetStayOpen toggles the "keep window open on focus loss" mode (aka
-// "always on top while visible"). Applied immediately: topmost follows the
-// mode, the frontend stops/starts auto-hiding on blur (stayopen:changed),
-// and the tray checkbox is pinned to the fact.
+// SetStayOpen toggles the keep-window-open (topmost while visible) mode.
 func (a *App) SetStayOpen(enable bool) error {
-    a.cfgMu.Lock()
-    a.cfg.StayOpen = enable
-    saveErr := config.Save(a.cfg)
-    a.cfgMu.Unlock()
-    if saveErr != nil {
-        return saveErr
+    if err := a.saveConfig(func(c *config.Config) { c.StayOpen = enable }); err != nil {
+        return err
     }
     if a.ctx != nil {
         runtime.WindowSetAlwaysOnTop(a.ctx, enable)
@@ -100,25 +83,15 @@ func (a *App) SetStayOpen(enable bool) error {
     return nil
 }
 
-// RememberPosState exposes the remember-position flag to the tray hooks:
-// the context menu seeds its checkbox from it at build time.
-func (a *App) RememberPosState() bool {
-    a.cfgMu.Lock()
-    defer a.cfgMu.Unlock()
-    return a.cfg.RememberPos
-}
+func (a *App) RememberPosState() bool { return a.rememberPos() }
 
-// SetRememberPos toggles the position persistence. Applied immediately:
-// while enabled, the watcher saves the window position on drag; on the next
-// show the saved position is restored (multi-monitor validated).
+// SetRememberPos toggles the position persistence. Enabling starts the
+// watcher lazily; disabling stops it.
 func (a *App) SetRememberPos(enable bool) error {
-    a.cfgMu.Lock()
-    a.cfg.RememberPos = enable
-    saveErr := config.Save(a.cfg)
-    a.cfgMu.Unlock()
-    if saveErr != nil {
-        return saveErr
+    if err := a.saveConfig(func(c *config.Config) { c.RememberPos = enable }); err != nil {
+        return err
     }
+    a.setWatcherRunning(enable)
     if a.trayB != nil {
         a.trayB.SetRememberPosState(enable)
     }
@@ -128,17 +101,12 @@ func (a *App) SetRememberPos(enable bool) error {
     return nil
 }
 
-// SetFavorites replaces the global favorites list. Favorites are
-// provider-agnostic ISO codes; availability filtering happens at render
-// time, so nothing here needs to know about providers.
+// SetFavorites replaces the global favorites list (provider-agnostic ISO
+// codes; availability filtering happens at render time).
 func (a *App) SetFavorites(codes []string) error {
-    a.cfgMu.Lock()
-    a.cfg.Favorites = config.NormalizeFavorites(codes)
-    saveErr := config.Save(a.cfg)
-    favs := append([]string(nil), a.cfg.Favorites...)
-    a.cfgMu.Unlock()
-    if saveErr != nil {
-        return saveErr
+    favs := config.NormalizeFavorites(codes)
+    if err := a.saveConfig(func(c *config.Config) { c.Favorites = favs }); err != nil {
+        return err
     }
     if a.ctx != nil {
         runtime.EventsEmit(a.ctx, "favorites:changed", favs)
@@ -146,18 +114,13 @@ func (a *App) SetFavorites(codes []string) error {
     return nil
 }
 
-// SetTheme switches the theme ("dark" | "light"). Applied immediately.
 func (a *App) SetTheme(theme string) error {
     theme = strings.ToLower(strings.TrimSpace(theme))
     if theme != "dark" && theme != "light" {
         return errors.New("err.theme")
     }
-    a.cfgMu.Lock()
-    a.cfg.Theme = theme
-    saveErr := config.Save(a.cfg)
-    a.cfgMu.Unlock()
-    if saveErr != nil {
-        return saveErr
+    if err := a.saveConfig(func(c *config.Config) { c.Theme = theme }); err != nil {
+        return err
     }
     if a.ctx != nil {
         runtime.EventsEmit(a.ctx, "theme:changed", theme)
@@ -165,20 +128,15 @@ func (a *App) SetTheme(theme string) error {
     return nil
 }
 
-// SetLanguage switches the UI language. One call does everything: persists
-// the choice, swaps the dictionary, retranlsates the tray menu (Retranslate)
-// and broadcasts the dictionary to the frontend.
+// SetLanguage switches the UI language: persists, swaps the dictionary,
+// retranlsates the tray, broadcasts to the frontend.
 func (a *App) SetLanguage(lang string) error {
     lang = strings.ToLower(strings.TrimSpace(lang))
     if !i18n.Has(lang) {
         return errors.New("err.language|" + lang)
     }
-    a.cfgMu.Lock()
-    a.cfg.Language = lang
-    saveErr := config.Save(a.cfg)
-    a.cfgMu.Unlock()
-    if saveErr != nil {
-        return saveErr
+    if err := a.saveConfig(func(c *config.Config) { c.Language = lang }); err != nil {
+        return err
     }
     if err := i18n.SetLanguage(lang); err != nil {
         return err
@@ -195,6 +153,9 @@ func (a *App) SetLanguage(lang string) error {
     return nil
 }
 
+// SetDefaults persists the default pair and the refresh interval. The
+// interval change restarts the ticker; the pair change is broadcast so the
+// main window re-seeds its selects.
 func (a *App) SetDefaults(base, target string, minutes int) error {
     base, target = strings.ToUpper(strings.TrimSpace(base)), strings.ToUpper(strings.TrimSpace(target))
     if len(base) != 3 || len(target) != 3 ||
@@ -209,14 +170,12 @@ func (a *App) SetDefaults(base, target string, minutes int) error {
         return errors.New("err.interval")
     }
 
-    a.cfgMu.Lock()
-    intervalChanged := a.cfg.RefreshMin != minutes
-    a.cfg.Base, a.cfg.Target, a.cfg.RefreshMin = base, target, minutes
-    saveErr := config.Save(a.cfg)
-    a.cfgMu.Unlock()
-
-    if saveErr != nil {
-        return saveErr
+    var intervalChanged bool
+    if err := a.saveConfig(func(c *config.Config) {
+        intervalChanged = c.RefreshMin != minutes
+        c.Base, c.Target, c.RefreshMin = base, target, minutes
+    }); err != nil {
+        return err
     }
     if intervalChanged {
         a.stopTicker()
@@ -240,15 +199,13 @@ func (a *App) SetAutoStart(enable bool) error {
     if err != nil {
         return err
     }
-    a.cfgMu.Lock()
-    a.cfg.AutoStart = enable
-    saveErr := config.Save(a.cfg)
-    a.cfgMu.Unlock()
-    if saveErr != nil {
-        return saveErr
+    // The OS is the source of truth: mirror the fact into the config
+    // (AutoStart is informational) and pin both UI surfaces.
+    if err := a.saveConfig(func(c *config.Config) { c.AutoStart = enable }); err != nil {
+        log.Printf("[settings] autostart mirror persist failed: %v", err)
     }
     if a.trayB != nil {
-        a.trayB.SetAutoState(enable) // pin the actual state
+        a.trayB.SetAutoState(enable)
     }
     if a.ctx != nil {
         runtime.EventsEmit(a.ctx, "autostart:changed", enable)
@@ -257,13 +214,11 @@ func (a *App) SetAutoStart(enable bool) error {
 }
 
 // Uninstall removes the autostart entry, schedules the deletion of the app
-// data folder and the executable (see uninstall_windows.go / uninstall_linux.go
-// for the detached-cleanup trick) and quits. The frontend confirms first —
-// this is irreversible.
+// data folder and the executable, and quits. The frontend confirms first.
 func (a *App) Uninstall() error {
     log.Printf("[app] uninstall requested")
     _ = autostartDisable()
-    exe, err := os.Executable()
+    exe, err := osExecutable()
     if err != nil {
         return err
     }
@@ -272,9 +227,5 @@ func (a *App) Uninstall() error {
         return err
     }
     a.Quit()
-    if err := runSelfUninstall(dataDir, exe); err != nil {
-        log.Printf("[app] self-uninstall scheduling failed: %v", err)
-        return err
-    }
-    return nil
+    return runSelfUninstall(dataDir, exe)
 }
