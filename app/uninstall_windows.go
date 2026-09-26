@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+	"time"
 
 	"golang.org/x/sys/windows/registry"
 )
@@ -18,22 +19,21 @@ import (
 // own exe on Windows — the file is locked, and the webview child processes
 // may keep data-dir files busy for a couple of seconds after our exit).
 //
-// Two independent mechanisms (belt and suspenders):
-//  1. a detached cmd script with THREE deletion passes and pauses between
-//     them (enough for the webview children to release the files), tracing
-//     its progress into its own log for post-mortem;
-//  2. a RunOnce registry entry: if the script could not finish (a stubborn
-//     file handle, an antivirus hold), Windows itself finishes the cleanup
-//     at the next logon; the script deletes the entry when it succeeds.
-//
-// Win32 subtleties that bit us before (all fixed here):
-//   - HideWindow:true (CREATE_NO_WINDOW) and CreationFlags:DETACHED_PROCESS
-//     are MUTUALLY EXCLUSIVE — combined, CreateProcess fails with
-//     ERROR_INVALID_PARAMETER and nothing is spawned at all. Use
-//     CREATE_NO_WINDOW only: cmd gets a hidden console and runs normally.
-//   - `timeout /t N` requires console input and aborts in console-less
-//     contexts; `ping -n N 127.0.0.1` is the classic console-independent
-//     delay.
+// Root cause of the previous failure: the script was spawned with
+// DETACHED_PROCESS — a process with NO console at all. On Win10, cmd.exe
+// executing a batch without a console may abort before running anything,
+// and the console-based delays (timeout.exe) fail unconditionally. The
+// manual run from Explorer worked because Explorer's cmd got a real
+// console. The fix reproduces that known-good environment:
+//   - CREATE_NO_WINDOW: the child gets a real (but hidden) console —
+//     byte-for-byte the environment of the successful manual run;
+//   - delays use ping -n (works console-less too), not timeout.exe;
+//   - every step appends a marker to a log file, and the parent WAITS for
+//     the "started" marker before exiting — a silently dead spawn is now
+//     visible in the app log;
+//   - a RunOnce registry entry remains as the last-resort finisher: if the
+//     script is killed by something external, Windows completes the cleanup
+//     at the next logon and removes the entry itself.
 func runSelfUninstall(dataDir, exePath string) error {
     script := filepath.Join(os.TempDir(), "cwidget-uninstall.bat")
     logPath := filepath.Join(os.TempDir(), "cwidget-uninstall.log")
@@ -43,25 +43,25 @@ func runSelfUninstall(dataDir, exePath string) error {
     content := strings.Join([]string{
         "@echo off",
         "echo [%date% %time%] cleanup started >> \"" + logPath + "\"",
-        "ping -n 3 127.0.0.1 > nul", // ~2s: let our process and the webview children exit
-        "rd /s /q \"" + dataDir + "\"",
+        "ping -n 3 127.0.0.1 > nul",
+        "rd /s /q \"" + dataDir + "\" >> \"" + logPath + "\" 2>&1",
         "ping -n 2 127.0.0.1 > nul",
-        "rd /s /q \"" + dataDir + "\"",
+        "rd /s /q \"" + dataDir + "\" >> \"" + logPath + "\" 2>&1",
         "ping -n 2 127.0.0.1 > nul",
-        "rd /s /q \"" + dataDir + "\"",
-        "del /f /q \"" + exePath + "\"",
+        "rd /s /q \"" + dataDir + "\" >> \"" + logPath + "\" 2>&1",
+        "del /f /q \"" + exePath + "\" >> \"" + logPath + "\" 2>&1",
         "reg delete HKCU\\" + runOnceKey + " /v " + runOnceName + " /f > nul 2>&1",
         "echo [%date% %time%] cleanup finished, errorlevel=%errorlevel% >> \"" + logPath + "\"",
         "del /f /q \"" + script + "\"",
-        "", // trailing CRLF for the last line
+        "",
     }, "\r\n")
 
     if err := os.WriteFile(script, []byte(content), 0o600); err != nil {
         return err
     }
 
-    // RunOnce backup: "%COMSPEC% /c ..." so cmd itself is guaranteed to be
-    // found at logon regardless of PATH.
+    // RunOnce backup: "%COMSPEC%" guarantees cmd is found at logon
+    // regardless of PATH.
     if k, err := registry.OpenKey(registry.CURRENT_USER, runOnceKey, registry.SET_VALUE); err == nil {
         _ = k.SetStringValue(runOnceName, `"%COMSPEC%" /c "`+script+`"`)
         k.Close()
@@ -69,15 +69,32 @@ func runSelfUninstall(dataDir, exePath string) error {
         log.Printf("[app] RunOnce backup not set: %v", err)
     }
 
-    // CREATE_NO_WINDOW only (via HideWindow) — see the comment above.
+    // CREATE_NO_WINDOW (0x08000000): a hidden but REAL console for the child
+    // — the exact environment of the confirmed-working manual run. Do NOT
+    // use DETACHED_PROCESS here: a console-less cmd aborts batch scripts on
+    // Win10 (see the comment above).
     cmd := exec.Command("cmd", "/c", script)
-    cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+    cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000}
     if err := cmd.Start(); err != nil {
-        // This error MUST be visible: log it here — the caller may already
-        // be shutting the app down.
-        log.Printf("[app] failed to spawn the cleanup script: %v", err)
+        log.Printf("[app] cleanup script spawn failed: %v", err)
         return err
     }
-    log.Printf("[app] cleanup script spawned (pid=%d)", cmd.Process.Pid)
+
+    // The first thing the script does is write the log marker. Wait for it:
+    // our process is about to exit, and a spawn that died instantly must be
+    // visible in the app log rather than silent.
+    started := false
+    for i := 0; i < 30; i++ { // up to 3s
+        if _, err := os.Stat(logPath); err == nil {
+            started = true
+            break
+        }
+        time.Sleep(100 * time.Millisecond)
+    }
+    if started {
+        log.Printf("[app] cleanup script started (script log: %s)", logPath)
+    } else {
+        log.Printf("[app] WARNING: cleanup script did not report start within 3s — the RunOnce entry remains as backup")
+    }
     return nil
 }

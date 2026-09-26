@@ -3,6 +3,7 @@ package app
 import (
 	"errors"
 	"log"
+	"os"
 	"strings"
 	"time"
 
@@ -214,11 +215,14 @@ func (a *App) SetAutoStart(enable bool) error {
 }
 
 // Uninstall removes the autostart entry, schedules the deletion of the app
-// data folder and the executable, and quits. The frontend confirms first.
+// data folder and the executable, and quits. The frontend confirms first —
+// this is irreversible. Quitting happens ONLY after the cleanup has been
+// scheduled successfully: on a scheduling failure the app stays alive so
+// the user can retry.
 func (a *App) Uninstall() error {
     log.Printf("[app] uninstall requested")
     _ = autostartDisable()
-    exe, err := osExecutable()
+    exe, err := os.Executable()
     if err != nil {
         return err
     }
@@ -226,6 +230,10 @@ func (a *App) Uninstall() error {
     if err != nil {
         return err
     }
-    a.Quit()
-    return runSelfUninstall(dataDir, exe)
+    if err := runSelfUninstall(dataDir, exe); err != nil {
+        log.Printf("[app] self-uninstall scheduling failed: %v", err)
+        return err // no quit — the user retries or removes manually
+    }
+    a.Quit() // scheduled — now it is safe to exit
+    return nil
 }
