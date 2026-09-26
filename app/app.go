@@ -10,7 +10,6 @@ package app
 import (
 	"context"
 	"log"
-	"os"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -122,10 +121,6 @@ func (a *App) BeforeClose(ctx context.Context) bool {
     runtime.WindowHide(ctx)
     return true
 }
-
-// osExecutable is a tiny indirection so settings.go does not import os
-// directly (keeps the file focused on the API surface).
-func osExecutable() (string, error) { return os.Executable() }
 
 /* ------------------------------ frontend log ----------------------------- */
 
