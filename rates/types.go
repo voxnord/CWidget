@@ -26,6 +26,7 @@ type Table struct {
     // frontend looks up a translation by the "provider.<source_key>" key.
     Source    string               `json:"source"`
     SourceKey string               `json:"source_key,omitempty"`
+    FromCache bool `json:"from_cache,omitempty"`
     Anchor    string               `json:"anchor"` // e.g. "RUB" or "EUR"
     Points    map[string]RatePoint `json:"points"`
     Names     map[string]string    `json:"names,omitempty"` // code -> human-readable name

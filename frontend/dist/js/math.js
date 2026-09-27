@@ -1,9 +1,9 @@
 import { S } from "./state.js";
 
-export function pair(a, b) {
-  const t2 = S.table;
-  if (!t2) return null;
-  const f = t2.points?.[a], q = t2.points?.[b];
+// pairIn: the a→b rate within a SPECIFIC table (today + yesterday).
+export function pairIn(tbl, a, b) {
+  if (!tbl) return null;
+  const f = tbl.points?.[a], q = tbl.points?.[b];
   if (!f || !q || !q.price) return null;
   const cur = f.price / q.price;
   let prev = null, hasPrev = false;
@@ -11,8 +11,11 @@ export function pair(a, b) {
   return { cur, prev, hasPrev };
 }
 
-// Trend: compared against yesterday's rate when the source provides it;
-// otherwise the caller renders a blank placeholder.
+export function pair(a, b) {
+  return pairIn(S.table, a, b);
+}
+
+// Trend: compared against yesterday's rate when the source provides it.
 export function trendDir(calc) {
   if (!calc || !calc.hasPrev) return null;
   const eps = Math.max(Math.abs(calc.prev), Math.abs(calc.cur)) * 1e-7;
@@ -21,10 +24,27 @@ export function trendDir(calc) {
   return d > 0 ? "up" : "down";
 }
 
-// Pick an available code for the automatic pair replacement in the MAIN
-// window. Preference: the preferred code, then the user's favorites, then
-// common USD/EUR/RUB, then anything else. STRICT guarantee: the result
-// exists in names and is NOT equal to taken; "" when there are no candidates.
+// Pick the best CACHED snapshot covering the pair: the user's preferred
+// source first, then the freshest quote date. Only snapshots within the
+// one-day freshness window count (same rule as the backend's serving).
+export function pickCachedTable(a, b) {
+  const yday = new Date();
+  yday.setDate(yday.getDate() - 1);
+  const minDate = yday.toISOString().slice(0, 10);
+  let best = null;
+  for (const tbl of S.tables ?? []) {
+    if (!tbl || !pairIn(tbl, a, b)) continue;
+    if (!tbl.quote_date || tbl.quote_date < minDate) continue;
+    if (tbl.source_key === S.provider) return tbl;
+    if (!best || (tbl.quote_date ?? "") > (best.quote_date ?? "")) best = tbl;
+  }
+  return best;
+}
+
+// Pick an available code for the automatic pair replacement. Preference:
+// the preferred code, then the user's favorites, then USD/EUR/RUB, then
+// anything else. STRICT guarantee: the result exists in names and is NOT
+// equal to taken; "" when there are no candidates.
 export function codesFallback(pref, names, taken) {
   names = names ?? {};
   const ok = c => c && c !== taken;

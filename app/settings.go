@@ -46,6 +46,7 @@ func (a *App) GetInitState() InitPayload {
             Names:    a.ratesM.Names(),
             Provider: pref,
             Fallback: tbl.IsFallback(pref),
+            Snapshots: a.ratesM.Snapshots(),
         },
     }
 }
@@ -61,10 +62,31 @@ func (a *App) SetProvider(key string) error {
         return err
     }
     a.ratesM.SetPreferred(key)
+    a.resetServedView()
     // Fetch the new source immediately (with a cooldown — protection
     // against "scroll the list and storm the APIs").
     go a.BackgroundRefresh(true)
     return nil
+}
+
+// resetServedView republishes the current state right after a provider
+// switch: the frontend gets a rates:update carrying either the NEW source's
+// cached snapshot (marked) or nothing — never the previous source's data.
+// Without it the UI would keep showing the old source until the new one
+// answers (publish() only fires on fetch completion).
+func (a *App) resetServedView() {
+    if a.ctx == nil {
+        return
+    }
+    tbl, _ := a.ratesM.Current()
+    pref := a.ratesM.Preferred()
+    runtime.EventsEmit(a.ctx, "rates:update", ratesUpdate{
+        Table:     tbl,
+        Names:     a.ratesM.Names(),
+        Provider:  pref,
+        Fallback:  tbl.IsFallback(pref),
+        Snapshots: a.ratesM.Snapshots(),
+    })
 }
 
 func (a *App) StayOpenState() bool { return a.stayOpen() }

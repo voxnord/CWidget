@@ -1,31 +1,25 @@
 // Central UI state shared across modules.
-// left/right   — ISO codes of the displayed pair;
-// amountSide   — which input is the source of truth ("left" | "right");
-// table/names  — the snapshot and code->name dictionary of the provider
-//                that ACTUALLY answered;
-// provider     — the key of the SELECTED provider (may differ — fallback);
-// fallback     — data comes from a fallback source;
-// pairOverride — the original pair temporarily replaced in the main window;
-// favorites    — global favorite ISO codes (provider-agnostic);
-// stayOpen     — keep the window open on focus loss (topmost while visible);
-// lang         — UI language code: drives number/date formatting.
+// table/tables — the SERVED snapshot and all per-source cached snapshots;
+// tableFromCache — true when the displayed table came from the cache;
+// liveFallback   — the selected source is down and a FALLBACK answered
+//                  live (distinct from the cache state);
+// fallback       — combined display flag: liveFallback || fromCache (⚠).
 export const S = {
   left: "RUB", right: "KZT",
   amountSide: "left",
-  table: null, names: {},
+  table: null, tables: [], names: {},
   dict: {},
   err: false,
   provider: "",
+  liveFallback: false,
   fallback: false,
-  wasFallback: null,
+  tableFromCache: false,
   pairOverride: null,
   favorites: [],
   stayOpen: false,
   lang: "ru",
 };
 
-// Module-private lets: cross-module access goes through accessors
-// (ES module bindings cannot be assigned from importing files).
 let saved = null;      // snapshot of the SAVED settings (null until opened)
 let confirmCtx = null; // current confirmation dialog context
 

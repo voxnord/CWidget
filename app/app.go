@@ -43,10 +43,11 @@ type TrayBridge interface {
 }
 
 type ratesUpdate struct {
-    Table    *rates.Table      `json:"table"`
-    Names    map[string]string `json:"names"`
-    Provider string            `json:"provider"`
-    Fallback bool              `json:"fallback"`
+    Table     *rates.Table      `json:"table"`
+    Names     map[string]string `json:"names"`
+    Provider  string            `json:"provider"`
+    Fallback  bool              `json:"fallback"`
+    Snapshots []rates.Table     `json:"snapshots,omitempty"` // per-source cached snapshots
 }
 
 type InitPayload struct {

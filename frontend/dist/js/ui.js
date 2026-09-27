@@ -1,5 +1,6 @@
 import { S } from "./state.js";
 import { t, tErr, providerName, preferredName } from "./i18n.js";
+import { fmtQuoteDate } from "./format.js";
 
 export const $ = id => document.getElementById(id);
 export const BLANK = "\u2800"; // braille blank: keeps layout width, draws nothing
@@ -44,12 +45,18 @@ export function showMode(mode) {
   catch (e) { reportToLog("error", "ShowMode failed: " + (e?.stack ?? e)); }
 }
 
-// Degradation indicator: a warning mark near the source badge plus a
-// dynamic tooltip explaining where the data actually comes from.
+// Degradation indicator: a warning mark near the source badge. Two honest
+// variants: a fallback answered instead of the selected source, or the
+// displayed data is a cached snapshot (with its quote date).
 export function updateFallbackUI() {
   const warn = $("src-warn");
   warn.hidden = !S.fallback;
   if (!S.fallback) { warn.title = ""; return; }
+  if (S.tableFromCache) {
+    const qd = S.table?.quote_date ? fmtQuoteDate(S.table.quote_date) : "";
+    warn.title = t("warn.cache.tip", providerName(S.table), qd);
+    return;
+  }
   let tip = t("warn.fallback", preferredName(), providerName(S.table));
   if (S.pairOverride) {
     tip += "\n" + t("warn.pair",
