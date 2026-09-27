@@ -15,35 +15,25 @@ import (
 // FetchTimeoutPerProvider is a hard limit for ONE attempt of ONE provider.
 const FetchTimeoutPerProvider = 8 * time.Second
 
-// StaleCacheAge defines how old a cached snapshot may be (by QuoteDate)
-// while still being considered fresh enough to serve. One day is correct
-// for daily-published official rates: "today" and "yesterday" are both fine,
-// anything older means the source is truly unavailable.
+// StaleCacheAge defines how old a snapshot may be (by QuoteDate) while
+// still being servable as a cached fallback. One day fits daily-published
+// official rates: "today" and "yesterday" are both fine, anything older is
+// honestly stale.
 const StaleCacheAge = 24 * time.Hour
 
-// Publication-chase knobs: a tick is placed pubGrace after the expected
-// publication (the mirror lag), re-checked every pubRetry while the expected
-// QuoteDate flip has not landed, and abandoned after pubWindow — reverting
-// to the regular interval.
-const (
-    pubGrace  = 15 * time.Minute
-    pubRetry  = 15 * time.Minute
-    pubWindow = 2 * time.Hour
-)
-
-// Registration — связка стабильного ключа провайдера и его реализации.
+// Registration binds a stable provider key to its implementation.
 type Registration struct {
     Key      string
     Provider Provider
 }
 
-// ProviderInfo — сведения о провайдере для UI.
+// ProviderInfo describes a provider for the UI.
 type ProviderInfo struct {
     Key  string `json:"key"`
     Name string `json:"name"`
 }
 
-// ProviderStatus — исход последней попытки конкретного провайдера.
+// ProviderStatus is the outcome of the last attempt of a specific provider.
 type ProviderStatus struct {
     Key       string    `json:"key"`
     Name      string    `json:"name"`
@@ -54,35 +44,77 @@ type ProviderStatus struct {
     LastOKAt  time.Time `json:"last_ok_at,omitempty"`
 }
 
-// Manager keeps the last successful snapshot, distributes requests across
-// providers and survives restarts thanks to the disk cache.
+// cacheFile is the on-disk format: one snapshot PER provider.
+type cacheFile struct {
+    Snapshots map[string]*Table `json:"snapshots"`
+}
+
+// Manager keeps one snapshot per provider.
 //
-// Fetch order: selected provider → fallback providers (registration order)
-// → the disk cache as a last-resort provider, VALIDATED by QuoteDate
-// freshness (StaleCacheAge). The cache beats a stale fallback: a two-day-old
-// snapshot from the cache is worse than a one-day-old live answer, but a
-// one-day-old cache is better than nothing at all.
+// SERVING MODEL (provider-agnostic — nothing here knows about specific
+// currencies or sources):
+//
+//   - LIVE WINS. Any successful fetch of the selected provider (or a
+//     fallback covering the pair) is served immediately, replacing
+//     whatever was displayed — a live answer is never worse than cached
+//     data. A provider switch (SetPreferred) therefore always ends up on
+//     the newly selected source's fresh data.
+//   - CACHE is the fallback FOR THE SELECTED SOURCE: while the selected
+//     provider is down, ITS OWN last snapshot serves the pairs it covers
+//     (marked FromCache), until it goes stale (StaleCacheAge). A cache is
+//     never shown for a provider that is alive, and never for a pair the
+//     selected source does not cover.
+//   - FALLBACK providers serve the pairs they cover (marked Fallback) —
+//     live answers, so they beat any cache.
+//
+// The frontend refines this per pair: when the served snapshot does not
+// cover the displayed pair, it looks for a cached snapshot of another
+// source that does (pickCachedTable) — still marked, still fresh-gated.
 type Manager struct {
     mu        sync.RWMutex
     regs      []Registration
-    preferred string // key of the selected provider (always non-empty, see main.go)
-    current   *Table
+    preferred string            // key of the selected provider
+    served    *Table            // last table handed out (live or cached copy)
+    snapshots map[string]*Table // per-provider snapshots (disk cache mirror)
     statuses  map[string]*ProviderStatus
-    pendingPub time.Time // publication being chased; guarded by mu
     cachePath string
     busy      atomic.Bool
+
+    pendingPub time.Time // publication being chased; guarded by mu
 }
 
 func NewManager(regs []Registration, cachePath string) (*Manager, error) {
-    m := &Manager{regs: regs, cachePath: cachePath, statuses: map[string]*ProviderStatus{}}
-    if b, err := os.ReadFile(cachePath); err == nil {
-        var cached Table
-        if json.Unmarshal(b, &cached) == nil && cached.Anchor != "" && len(cached.Points) > 0 {
-            cached.FetchedAt = cached.FetchedAt.UTC()
-            m.current = &cached
-        }
+    m := &Manager{
+        regs:      regs,
+        cachePath: cachePath,
+        snapshots: map[string]*Table{},
+        statuses:  map[string]*ProviderStatus{},
     }
+    m.loadCache()
     return m, nil
+}
+
+// loadCache reads the per-provider cache. The previous single-snapshot
+// format is imported under its own source_key — no migration needed.
+func (m *Manager) loadCache() {
+    raw, err := os.ReadFile(m.cachePath)
+    if err != nil {
+        return
+    }
+    var cf cacheFile
+    if json.Unmarshal(raw, &cf) == nil && len(cf.Snapshots) > 0 {
+        m.snapshots = cf.Snapshots
+        return
+    }
+    var t Table
+    if json.Unmarshal(raw, &t) == nil && t.Anchor != "" && len(t.Points) > 0 {
+        key := t.SourceKey
+        if key == "" {
+            key = "unknown"
+        }
+        m.snapshots[key] = &t
+        log.Printf("[rates] legacy single-snapshot cache imported under key %q", key)
+    }
 }
 
 /* --------------------------- provider registry --------------------------- */
@@ -91,6 +123,20 @@ func (m *Manager) SetPreferred(key string) {
     m.mu.Lock()
     m.preferred = key
     m.pendingPub = time.Time{} // another source — another publication schedule
+    // Reset the served view ONLY if it belongs to another provider: the UI
+    // must not keep showing the previous source's data while the newly
+    // selected one is being fetched. The frontend shows its "unavailable"
+    // state until the first live answer (or the new source's cached
+    // snapshot, seeded by Current() below).
+    if m.served != nil && m.served.SourceKey != key {
+        if snap := m.snapshots[key]; snap != nil && cacheIsFresh(snap) {
+            cp := *snap
+            cp.FromCache = true
+            m.served = &cp // seed from the NEW source's own cache — never from another source
+        } else {
+            m.served = nil // honest "fetching" state until a live answer
+        }
+    }
     m.mu.Unlock()
 }
 
@@ -98,59 +144,6 @@ func (m *Manager) Preferred() string {
     m.mu.RLock()
     defer m.mu.RUnlock()
     return m.preferred
-}
-
-// NextTick returns when the next automatic refresh should run: the sooner
-// of (a) the regular interval from now and (b) a publication-chase moment —
-// right after the selected source is expected to publish a new QuoteDate,
-// or a re-check while a chased publication is overdue within the window.
-func (m *Manager) NextTick(now time.Time, interval time.Duration) time.Time {
-    base := now.Add(interval)
-
-    m.mu.RLock()
-    pending := m.pendingPub
-    m.mu.RUnlock()
-    if !pending.IsZero() {
-        if now.Before(pending.Add(pubWindow)) {
-            if cand := now.Add(pubRetry); cand.Before(base) {
-                return cand
-            }
-            return base
-        }
-        m.mu.Lock()
-        if m.pendingPub.Equal(pending) {
-            m.pendingPub = time.Time{}
-        }
-        m.mu.Unlock()
-    }
-
-    m.mu.RLock()
-    cur := m.current
-    preferred := m.preferred
-    m.mu.RUnlock()
-    if cur == nil || preferred == "" {
-        return base
-    }
-    var pub PublicationAware
-    for _, r := range m.regs {
-        if r.Key == preferred {
-            if pa, ok := r.Provider.(PublicationAware); ok {
-                pub = pa
-            }
-            break
-        }
-    }
-    if pub == nil {
-        return base
-    }
-    next := pub.NextPublication(now).Add(pubGrace)
-    if next.Before(base) {
-        m.mu.Lock()
-        m.pendingPub = next
-        m.mu.Unlock()
-        return next
-    }
-    return base
 }
 
 func (m *Manager) HasKey(key string) bool {
@@ -210,7 +203,7 @@ func (m *Manager) recordStatus(key string, err error) {
     st.LastOKAt = time.Now()
 }
 
-// ordered — порядок обхода: выбранный первым, остальные резервом.
+// ordered — the selected provider first, the rest as fallbacks.
 func (m *Manager) ordered() []Registration {
     m.mu.RLock()
     defer m.mu.RUnlock()
@@ -233,22 +226,20 @@ func (m *Manager) ordered() []Registration {
 
 /* -------------------------------- refresh -------------------------------- */
 
-// TryRefresh walks providers in order; the first successful snapshot wins.
-// When every live provider fails, the disk cache serves as the last resort
-// — but only while its QuoteDate is fresh enough (StaleCacheAge). A stale
-// cache is NOT served: better an honest "offline" state than silently old
-// data.
-//
-// Deduplication: a snapshot whose QuoteDate equals the currently stored one
-// does not replace the cache (the data is identical — only FetchedAt is
-// bumped). This keeps the "refresh every N minutes" semantic while reducing
-// real network pressure: with daily-published official rates most ticks of
-// the day return the same data.
+// TryRefresh walks providers in order: the selected one first, then
+// fallbacks. EVERY successful answer immediately becomes the served table
+// (live wins — regardless of what was displayed before). A fallback's
+// snapshot is stored under ITS OWN key and never clobbers other sources'.
+// When every live provider failed, the SELECTED source's own fresh snapshot
+// serves as the cached fallback (marked); other sources' snapshots stay in
+// the store for the frontend's per-pair refinement, but the manager does
+// not present foreign-source data when the selected source is merely down.
 func (m *Manager) TryRefresh(ctx context.Context) (*Table, error) {
     if !m.busy.CompareAndSwap(false, true) {
         if t, ok := m.Current(); ok {
             return t, nil
         }
+        return nil, errors.New("rates: refresh already in flight")
     }
     defer m.busy.Store(false)
 
@@ -268,37 +259,42 @@ func (m *Manager) TryRefresh(ctx context.Context) (*Table, error) {
         tbl.FetchedAt = tbl.FetchedAt.UTC()
         tbl.SourceKey = reg.Key
 
-        m.mu.RLock()
-        prev := m.current
-        m.mu.RUnlock()
-        if prev != nil && tbl.QuoteDate != "" && tbl.QuoteDate == prev.QuoteDate &&
-            prev.SourceKey == reg.Key {
-            // Same provider, same quote date: nothing new. Refresh the fetch
-            // timestamp (it reflects "when we last checked"), keep the rest.
+        m.mu.Lock()
+        if prev := m.snapshots[reg.Key]; prev != nil && tbl.QuoteDate != "" && tbl.QuoteDate == prev.QuoteDate {
+            // Same source, same quote date: nothing new. Keep the
+            // publication chase running — the new quote date is still
+            // expected.
             prev.FetchedAt = tbl.FetchedAt
-            m.persist(prev)
-            log.Printf("[rates] %s: quote date %s unchanged — cache kept, no update needed",
+            m.served = prev
+            m.persistLocked()
+            m.mu.Unlock()
+            log.Printf("[rates] %s: quote date %s unchanged — snapshot kept, no update needed",
                 reg.Provider.Name(), tbl.QuoteDate)
             return prev, nil
         }
-
-        m.mu.Lock()
-        m.current = tbl
+        m.snapshots[reg.Key] = tbl
+        m.served = tbl
         m.pendingPub = time.Time{} // a chased publication (if any) has landed
+        m.persistLocked()
         m.mu.Unlock()
-        m.persist(tbl)
         return tbl, nil
     }
 
-    // Every live provider failed. Last resort: the disk cache — but only
-    // while its quote date is fresh enough. A stale cache is worse than an
-    // honest "offline": the user sees the ⚠/offline indicator and knows the
-    // data may be old.
-    if cur, ok := m.Current(); ok && cacheIsFresh(cur) {
-        log.Printf("[rates] all providers failed — serving the fresh-enough disk cache (quotes=%s, fetched at=%s)",
-            cur.QuoteDate, cur.FetchedAt.Local().Format("15:04"))
-        return cur, nil
+    // Every live provider failed. Cached fallback: the SELECTED source's
+    // OWN fresh snapshot (never another source's — a cache is bound to the
+    // provider whose data it is). Other sources' snapshots remain in the
+    // store for the frontend's per-pair refinement.
+    m.mu.Lock()
+    if snap := m.snapshots[m.preferred]; snap != nil && cacheIsFresh(snap) {
+        cp := *snap
+        cp.FromCache = true
+        m.served = &cp
+        m.mu.Unlock()
+        log.Printf("[rates] all providers failed — serving the selected source's cached snapshot (quotes=%s)",
+            snap.QuoteDate)
+        return m.served, nil
     }
+    m.mu.Unlock()
 
     if lastErr == nil {
         lastErr = errors.New("rates: provider list is empty")
@@ -306,9 +302,7 @@ func (m *Manager) TryRefresh(ctx context.Context) (*Table, error) {
     return nil, lastErr
 }
 
-// cacheIsFresh reports whether the snapshot's quote date is within the
-// StaleCacheAge window. Snapshots without a QuoteDate (very old cache files
-// from before this field existed) are treated as stale — honesty first.
+// cacheIsFresh: the snapshot's quote date is within StaleCacheAge.
 func cacheIsFresh(t *Table) bool {
     if t.QuoteDate == "" {
         return false
@@ -317,34 +311,103 @@ func cacheIsFresh(t *Table) bool {
     if err != nil {
         return false
     }
-    // End of the quote day + one full day of grace: a snapshot quoted today
-    // or yesterday is fine; "two days ago and older" is stale.
     return time.Since(qd.AddDate(0, 0, 1)) < StaleCacheAge
 }
 
-func (m *Manager) Current() (*Table, bool) {
+// Snapshots returns copies of all stored snapshots for the frontend's
+// per-pair refinement.
+func (m *Manager) Snapshots() []Table {
     m.mu.RLock()
     defer m.mu.RUnlock()
-    return m.current, m.current != nil
+    out := make([]Table, 0, len(m.snapshots))
+    for _, t := range m.snapshots {
+        out = append(out, *t)
+    }
+    return out
 }
 
-// Names returns the "code -> name" dictionary of STRICTLY the current
-// provider.
+// Current returns the last served table, boot-seeding from the selected
+// source's own snapshot when nothing was served yet.
+func (m *Manager) Current() (*Table, bool) {
+    m.mu.Lock()
+    defer m.mu.Unlock()
+    if m.served == nil && m.preferred != "" {
+        if snap := m.snapshots[m.preferred]; snap != nil && cacheIsFresh(snap) {
+            cp := *snap
+            cp.FromCache = true
+            m.served = &cp
+        }
+    }
+    return m.served, m.served != nil
+}
+
+// Names returns the "code -> name" dictionary of the served table.
 func (m *Manager) Names() map[string]string {
     m.mu.RLock()
     defer m.mu.RUnlock()
-    if m.current == nil {
+    if m.served == nil {
         return nil
     }
-    out := make(map[string]string, len(m.current.Names))
-    for k, v := range m.current.Names {
+    out := make(map[string]string, len(m.served.Names))
+    for k, v := range m.served.Names {
         out[k] = v
     }
     return out
 }
 
-func (m *Manager) persist(t *Table) {
-    b, err := json.MarshalIndent(t, "", " ")
+// NextTick — publication-chase scheduling (see PublicationAware).
+func (m *Manager) NextTick(now time.Time, interval time.Duration) time.Time {
+    base := now.Add(interval)
+
+    m.mu.RLock()
+    pending := m.pendingPub
+    m.mu.RUnlock()
+    if !pending.IsZero() {
+        if now.Before(pending.Add(2 * time.Hour)) {
+            if cand := now.Add(15 * time.Minute); cand.Before(base) {
+                return cand
+            }
+            return base
+        }
+        m.mu.Lock()
+        if m.pendingPub.Equal(pending) {
+            m.pendingPub = time.Time{}
+        }
+        m.mu.Unlock()
+    }
+
+    m.mu.RLock()
+    cur := m.served
+    preferred := m.preferred
+    m.mu.RUnlock()
+    if cur == nil || preferred == "" {
+        return base
+    }
+    var pub PublicationAware
+    for _, r := range m.regs {
+        if r.Key == preferred {
+            if pa, ok := r.Provider.(PublicationAware); ok {
+                pub = pa
+            }
+            break
+        }
+    }
+    if pub == nil {
+        return base
+    }
+    next := pub.NextPublication(now).Add(15 * time.Minute)
+    if next.Before(base) {
+        m.mu.Lock()
+        m.pendingPub = next
+        m.mu.Unlock()
+        return next
+    }
+    return base
+}
+
+// Caller holds the lock.
+func (m *Manager) persistLocked() {
+    b, err := json.MarshalIndent(cacheFile{Snapshots: m.snapshots}, "", " ")
     if err != nil {
         return
     }

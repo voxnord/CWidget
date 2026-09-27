@@ -24,3 +24,6 @@ Thumbs.db
 .vscode/
 *.suo
 *.user
+
+# Внутренние рабочие материалы и документация
+/workspace

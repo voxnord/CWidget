@@ -145,7 +145,8 @@ func (a *App) startCooldown(d time.Duration) {
 }
 
 // publish distributes a refresh result: an event to the frontend plus tray
-// synchronization (updated-at label, degraded and offline states).
+// synchronization. A cache-served result is honest in the tray too: the
+// "offline — data from HH:MM" tooltip describes exactly that state.
 func (a *App) publish(tbl *rates.Table, err error) {
     if a.ctx == nil {
         return
@@ -156,28 +157,34 @@ func (a *App) publish(tbl *rates.Table, err error) {
         runtime.EventsEmit(a.ctx, "rates:error", err.Error())
         if a.trayB != nil {
             a.trayB.NotifyFailure(err.Error())
-            a.trayB.SetStale(true) // tray icon tooltip: "offline"
+            a.trayB.SetStale(true)
         }
         return
     }
     a.stale.Store(false)
     preferred := a.ratesM.Preferred()
     payload := ratesUpdate{
-        Table:    tbl,
-        Names:    a.ratesM.Names(),
-        Provider: preferred,
-        Fallback: tbl.IsFallback(preferred),
+        Table:     tbl,
+        Names:     a.ratesM.Names(),
+        Provider:  preferred,
+        Fallback:  tbl.IsFallback(preferred),
+        Snapshots: a.ratesM.Snapshots(),
     }
-    log.Printf("[rates] refreshed from %q (fallback=%v, quotes=%s, at=%s)",
-        tbl.Source, payload.Fallback, tbl.QuoteDate, tbl.FetchedAt.Local().Format("15:04:05"))
+    log.Printf("[rates] refreshed from %q (fallback=%v, cached=%v, quotes=%s, at=%s)",
+        tbl.Source, payload.Fallback, tbl.FromCache, tbl.QuoteDate, tbl.FetchedAt.Local().Format("15:04:05"))
     runtime.EventsEmit(a.ctx, "rates:update", payload)
     if a.trayB != nil {
         a.trayB.SetUpdatedLabel(tbl.FetchedAt)
-        a.trayB.SetStale(false)
-        if payload.Fallback {
-            a.trayB.SetDegraded(true, preferred, tbl.SourceKey)
-        } else {
+        if tbl.FromCache {
+            a.trayB.SetStale(true)          // "offline — data from HH:MM"
             a.trayB.SetDegraded(false, "", "")
+        } else {
+            a.trayB.SetStale(false)
+            if payload.Fallback {
+                a.trayB.SetDegraded(true, preferred, tbl.SourceKey)
+            } else {
+                a.trayB.SetDegraded(false, "", "")
+            }
         }
     }
 }

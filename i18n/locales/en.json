@@ -81,6 +81,8 @@
   "ui.retry_in": "Retry in {0} s",
   "ui.swap.amounts": "Swap amounts and currencies",
   "ui.swap.currencies": "Swap currencies",
+  "badge.cached": "· cached",
+  "warn.cache.tip": "Showing saved quotes from {0}, dated {1}",
   "warn.fallback": "{0} unavailable — showing data from {1} (fallback)",
   "warn.tray.tip": "⚠ {0} unavailable — data from {1} (fallback)",
   "warn.offline.tip": "⚠ Offline — rates are not being updated",
