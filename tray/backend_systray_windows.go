@@ -7,6 +7,7 @@ import (
 	"log"
 	"runtime"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 	"unsafe"
@@ -180,6 +181,8 @@ type win32Backend struct {
     onClickFn  func()
     onDClickFn func()
     onRClickFn func()
+
+    dblPending atomic.Bool // a DBLCLK arrived: swallow its trailing WM_LBUTTONUP
 }
 
 // win32Item is a handle to one menu item.
@@ -673,10 +676,14 @@ func trayWndProc(hwnd, msg, wparam, lparam uintptr) uintptr {
     case wmAppTrayCb: // shell icon callback: lparam = the mouse message
         switch lparam {
         case wmLButtonUp:
+            if b.dblPending.CompareAndSwap(true, false) {
+                return 0 // the trailing WM_LBUTTONUP of a double-click sequence
+            }
             if fn := b.getOnClick(); fn != nil {
                 fn()
             }
         case wmLButtonDblClk:
+            b.dblPending.Store(true) // swallow the trailing WM_LBUTTONUP
             if fn := b.getDClick(); fn != nil {
                 fn()
             }

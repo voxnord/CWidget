@@ -11,22 +11,29 @@ import { openConfirm, closeConfirm, openSettings, updateDirtyUI, refreshProvider
  * this file wires the DOM events that cross modules, subscribes to backend
  * events, and boots the app. */
 
-/* Popup behavior: hide on focus loss (with an anti-race guard). Right after
- * clicking a tray menu item Windows briefly returns focus to the taskbar —
- * a naive blur handler would hide the window a split second after showing
- * it. A grace period after show/focus plus a hasFocus() re-check fixes it. */
+/* Popup behavior: hide on focus loss (two anti-race guards).
+ * 1) Right after clicking a tray menu item Windows briefly returns focus
+ *    to the taskbar — the grace period absorbs it.
+ * 2) The 120ms deferred hide must not fire after a NEWER focus (the user
+ *    re-opened the widget within the window): every focus bumps focusSeq,
+ *    the blur captures it, and a mismatch cancels the hide. Without this a
+ *    stale timer could hide a freshly re-opened window — the classic
+ *    "click, flicker, click again" symptom. */
 let hideGuardUntil = 0;
-const armHideGuard = (ms = 700) => { hideGuardUntil = Date.now() + ms; };
+let focusSeq = 0;
+const armHideGuard = (ms = 300) => { hideGuardUntil = Date.now() + ms; };
 
 window.addEventListener("blur", () => {
+  const seq = focusSeq; // captured: a newer focus cancels this hide
   setTimeout(() => {
-    if (S.stayOpen) return; // the user pinned the window — no auto-hide
+    if (S.stayOpen) return;
+    if (focusSeq !== seq) return;
     if (Date.now() < hideGuardUntil) return;
     if (document.hasFocus()) return;
     try { window.runtime.WindowHide(); } catch {}
   }, 120);
 });
-window.addEventListener("focus", () => armHideGuard(300));
+window.addEventListener("focus", () => { focusSeq++; armHideGuard(300); });
 
 // Apply a dictionary to all marked elements, then redraw dynamic texts.
 function applyDict(dict) {

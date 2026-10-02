@@ -7,6 +7,7 @@
 package popup
 
 import (
+	"log"
 	"time"
 	"unsafe"
 
@@ -15,6 +16,7 @@ import (
 
 var (
     user32                   = windows.NewLazySystemDLL("user32.dll")
+    kernel32                 = windows.NewLazySystemDLL("kernel32.dll")
     gdi32                    = windows.NewLazySystemDLL("gdi32.dll")
     dwmapi                   = windows.NewLazySystemDLL("dwmapi.dll")
     shell32                  = windows.NewLazySystemDLL("shell32.dll")
@@ -35,6 +37,10 @@ var (
     procIsWindowVisible      = user32.NewProc("IsWindowVisible")
     procGetSystemMetrics     = user32.NewProc("GetSystemMetrics")
     procSHAppBarMessage      = shell32.NewProc("SHAppBarMessage")
+    procGetForegroundWindow      = user32.NewProc("GetForegroundWindow")
+    procGetWindowThreadProcessId = user32.NewProc("GetWindowThreadProcessId")
+    procGetCurrentThreadId       = kernel32.NewProc("GetCurrentThreadId")
+    procAttachThreadInput        = user32.NewProc("AttachThreadInput")
 )
 
 const (
@@ -83,6 +89,12 @@ const (
     // frame flash before the webview paints).
     cornerNum = 13.0
     cornerDen = 380.0
+
+    // HWND_TOPMOST/-1 and HWND_NOTOPMOST/-2 in uintptr form.
+    hwndTopmost  = ^uintptr(0)
+    hwndNotopmost = ^uintptr(1)
+
+    swpNoActivateFlash = 0x0010 // SWP_NOACTIVATE
 )
 
 type rect struct {
@@ -384,14 +396,46 @@ func applyRegion(hwnd uintptr) {
 
 /* -------------------------------- focus ---------------------------------- */
 
-// FocusWindow activates the window (focus + foreground). Best-effort:
-// Windows restricts foreground transfers to "foreign" processes, but the
-// process owning the tray icon the user just clicked is allowed to do this.
+// FocusWindow activates the window and guarantees it is VISIBLE. Foreground
+// is restricted by Windows: it reliably succeeds when the calling process
+// received the last input event. A tray click IS delivered to this process,
+// but the grant is racy across the goroutine dispatch — so verify, and on
+// failure: the classic AttachThreadInput trick, then a topmost flash as the
+// last resort. A window left BEHIND the active app reads as "the click did
+// nothing" — visibility is non-negotiable, focus is best-effort.
 func FocusWindow(title string) {
     hwnd := findHwnd(title)
     if hwnd == 0 {
         return
     }
-    procShowWindow.Call(hwnd, swRestore) // restore if minimized
-    procSetForegroundWindow.Call(hwnd)
+    procShowWindow.Call(hwnd, swRestore)
+
+    granted := false
+    if r, _, _ := procSetForegroundWindow.Call(hwnd); r != 0 {
+        granted = getForegroundHwnd() == hwnd
+    }
+    if !granted {
+        fg := getForegroundHwnd()
+        foreThread, _, _ := procGetWindowThreadProcessId.Call(fg, 0)
+        thisThread, _, _ := procGetCurrentThreadId.Call()
+        if foreThread != 0 && foreThread != thisThread {
+            procAttachThreadInput.Call(thisThread, foreThread, 1)
+            procSetForegroundWindow.Call(hwnd)
+            procAttachThreadInput.Call(thisThread, foreThread, 0)
+            granted = getForegroundHwnd() == hwnd
+        }
+    }
+    if !granted {
+        // Raise to the top of the Z-order without activation: topmost for
+        // one transition, back to the normal band right after (the
+        // stay-open mode manages topmost on its own).
+        procSetWindowPos.Call(hwnd, hwndTopmost, 0, 0, 0, 0, swpNoSize|swpNoMove|swpNoActivateFlash)
+        procSetWindowPos.Call(hwnd, hwndNotopmost, 0, 0, 0, 0, swpNoSize|swpNoMove|swpNoActivateFlash)
+    }
+    log.Printf("[window] FocusWindow: foreground granted=%v", granted)
+}
+
+func getForegroundHwnd() uintptr {
+    h, _, _ := procGetForegroundWindow.Call()
+    return h
 }

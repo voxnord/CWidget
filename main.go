@@ -130,6 +130,7 @@ func main() {
         ShowWidget:   appCore.ShowWidget,
         OpenSettings: appCore.OpenSettingsView,
         Refresh:      appCore.ManualRefresh,
+        ToggleWidget:    appCore.ToggleWidget,
         ToggleAutoStart: func(enable bool) {
             if err := appCore.SetAutoStart(enable); err != nil {
                 log.Printf("[tray] autostart toggle failed (enable=%v): %v", enable, err)

@@ -19,6 +19,7 @@ import (
 // (the app injects implementations).
 type Hooks struct {
     ShowWidget        func()
+    ToggleWidget      func() // native tray toggle: hidden -> show, visible -> hide
     OpenSettings      func()
     Refresh           func()
     ToggleAutoStart   func(enable bool)
@@ -96,12 +97,14 @@ func safeGo(what string, fn func()) {
 func (t *Tray) onReady() {
     t.be.setTooltip(i18n.T("tray.tooltip"))
 
-    // Left click — open the converter window. Right click — context menu
-    // (the backend displays it). Double click — the window as well.
-    // Click lines are logged: the first checkpoint when diagnosing a
-    // "dead" tray.
+    // Left click — a native TOGGLE (hidden -> show, visible -> hide). See
+    // app.ToggleWidget for why this is not an unconditional show.
     t.be.setOnClick(func() {
-        log.Printf("[tray] left click -> show request")
+        log.Printf("[tray] left click -> toggle request")
+        if t.hooks.ToggleWidget != nil {
+            safeGo("toggle", t.hooks.ToggleWidget)
+            return
+        }
         if t.hooks.ShowWidget != nil {
             safeGo("show", t.hooks.ShowWidget)
         }

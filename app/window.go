@@ -108,3 +108,23 @@ func (a *App) HideWindow() {
         runtime.WindowHide(a.ctx)
     }
 }
+
+// ToggleWidget shows the widget when hidden, hides it when visible. The
+// tray's left click uses this NATIVE toggle instead of an unconditional
+// show: clicking the icon makes the taskbar take focus, which fires the
+// frontend blur-hide for a visible window, and an unconditional show then
+// races that hide (its 120ms timer can fire after the re-show and hide a
+// freshly opened window — the "flicker / need several clicks" symptom).
+// With a toggle the visible branch hides explicitly (no race), and the
+// hidden branch shows without any pending blur to fight.
+func (a *App) ToggleWidget() {
+    Safe("window.ToggleWidget", func() {
+        if popup.IsWindowVisible(WindowTitle) {
+            log.Printf("[window] toggle: visible -> hide")
+            a.HideWindow()
+            return
+        }
+        log.Printf("[window] toggle: hidden -> show")
+        a.ShowMode("main")
+    })
+}
