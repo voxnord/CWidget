@@ -80,23 +80,26 @@ jobs:
     needs: [build-windows, build-linux]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4 # needed to read the release-notes file
+      - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with: { merge-multiple: true, path: dist }
       - name: Prepare release notes
-        id: notes
         run: |
           TAG="${GITHUB_REF_NAME#v}"
           FILE="docs/releases/v${TAG}.md"
+          OUT="release-notes.md"
           if [ -f "$FILE" ]; then
+            cp "$FILE" "$OUT"
+            echo "mode=manual" >> "$GITHUB_ENV"
             echo "using $FILE"
-            { echo "body<<EOF"; cat "$FILE"; echo "EOF"; } >> "$GITHUB_OUTPUT"
           else
-            echo "no $FILE — falling back to auto-generated notes"
-            echo "body=" >> "$GITHUB_OUTPUT"
+            # no authored notes: an empty body_path would fail the action,
+            # so write a one-liner and let GitHub append its own notes
+            echo "See the repository README for details." > "$OUT"
+            echo "mode=auto" >> "$GITHUB_ENV"
           fi
       - uses: softprops/action-gh-release@v2
         with:
           files: dist/*
-          body_path: ${{ steps.notes.outputs.body != '' && format('docs/releases/v{0}.md', github.ref_name) || '' }}
-          generate_release_notes: ${{ steps.notes.outputs.body == '' }}
+          body_path: release-notes.md
+          generate_release_notes: ${{ env.mode == 'auto' }}
