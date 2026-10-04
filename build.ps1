@@ -99,12 +99,16 @@ if ($Archive) {
     $dist = "build/dist"
     New-Item -ItemType Directory -Force -Path $dist | Out-Null
     $zip = Join-Path $dist "CWidget_${Version}_windows_amd64.zip"
-    $files = @("build/bin/CWidget.exe")
-    if ($Installer -and (Test-Path "build/bin/CWidget-amd64-installer.exe")) {
-        $files += "build/bin/CWidget-amd64-installer.exe"
-    }
-    Compress-Archive -Force -Path $files -DestinationPath $zip
+    Compress-Archive -Force -Path "build/bin/CWidget.exe" -DestinationPath $zip
     Write-Host "      $zip" -ForegroundColor Green
+
+    # The NSIS installer lives in build/bin; copy it next to the zip so the
+    # CI artifact glob (build/dist/*) picks both up.
+    if ($Installer -and (Test-Path "build/bin/CWidget-amd64-installer.exe")) {
+        $inst = Join-Path $dist "CWidget_${Version}_windows_amd64-installer.exe"
+        Copy-Item "build/bin/CWidget-amd64-installer.exe" $inst -Force
+        Write-Host "      $inst" -ForegroundColor Green
+    }
 }
 
 Write-Host ""

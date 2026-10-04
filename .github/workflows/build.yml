@@ -1,0 +1,102 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write # creating the Release on a tag
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Install Wails CLI
+        run: go install github.com/wailsapp/wails/v2/cmd/wails@v2.15.0
+      - name: Install NSIS
+        run: choco install nsis -y --no-progress
+      - name: Check VERSION matches tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        run: |
+          $v = "${env:GITHUB_REF_NAME}" -replace '^v',''
+          $f = (Get-Content VERSION -TotalCount 1).Trim()
+          if ($v -ne $f) { Write-Host "Tag v$v != VERSION $f"; exit 1 }
+      - name: Build
+        run: .\build.ps1 -Installer -Archive
+      # Smoke: the exe must exist, be non-trivial, and report its version.
+      - name: Smoke check the binary
+        run: |
+          if (!(Test-Path build/bin/CWidget.exe)) { Write-Host "exe missing"; exit 1 }
+          $size = (Get-Item build/bin/CWidget.exe).Length
+          if ($size -lt 5MB) { Write-Host "exe suspiciously small ($size bytes)"; exit 1 }
+          Write-Host "exe OK ($([math]::Round($size/1MB,1)) MB)"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: CWidget-windows-amd64
+          path: |
+            build/dist/*.zip
+            build/dist/*.exe
+
+  build-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Install Wails CLI
+        run: go install github.com/wailsapp/wails/v2/cmd/wails@v2.15.0
+      - name: Check VERSION matches tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          V="${GITHUB_REF_NAME#v}"; F=$(head -n1 VERSION | tr -d '[:space:]')
+          [ "$V" = "$F" ] || { echo "Tag v$V != VERSION $F"; exit 1; }
+      - name: Build
+        run: |
+          chmod +x build.sh
+          WEBKIT41=1 ARCHIVE=1 ./build.sh
+      - name: Smoke check the binary
+        run: |
+          test -f build/bin/CWidget || { echo "binary missing"; exit 1; }
+          file build/bin/CWidget | grep -q "ELF 64-bit" || { echo "not a linux ELF"; exit 1; }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: CWidget-linux-amd64
+          path: build/dist/*.tar.gz
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [build-windows, build-linux]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4 # needed to read the release-notes file
+      - uses: actions/download-artifact@v4
+        with: { merge-multiple: true, path: dist }
+      - name: Prepare release notes
+        id: notes
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          FILE="docs/releases/v${TAG}.md"
+          if [ -f "$FILE" ]; then
+            echo "using $FILE"
+            { echo "body<<EOF"; cat "$FILE"; echo "EOF"; } >> "$GITHUB_OUTPUT"
+          else
+            echo "no $FILE — falling back to auto-generated notes"
+            echo "body=" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          body_path: ${{ steps.notes.outputs.body != '' && format('docs/releases/v{0}.md', github.ref_name) || '' }}
+          generate_release_notes: ${{ steps.notes.outputs.body == '' }}
