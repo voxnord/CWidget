@@ -5,7 +5,7 @@
 //                  live (distinct from the cache state);
 // fallback       — combined display flag: liveFallback || fromCache (⚠).
 export const S = {
-  left: "RUB", right: "KZT",
+  left: "USD", right: "EUR",
   amountSide: "left",
   table: null, tables: [], names: {},
   dict: {},

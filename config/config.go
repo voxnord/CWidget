@@ -79,7 +79,7 @@ func Load() (*Config, error) {
 }
 
 func Default() *Config {
-    return &Config{Base: "RUB", Target: "KZT", RefreshMin: 180}
+    return &Config{Base: "USD", Target: "EUR", RefreshMin: 180}
 }
 
 // NormalizeFavorites uppercases, validates (3 letters A-Z) and deduplicates
@@ -132,7 +132,7 @@ func sanitize(c *Config) {
         c.RefreshMin = 5
     }
     if c.Base == "" || c.Target == "" || c.Base == c.Target {
-        c.Base, c.Target = "RUB", "KZT"
+        c.Base, c.Target = "USD", "EUR"
     }
 }
 
