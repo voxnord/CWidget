@@ -17,12 +17,12 @@ A lightweight currency-converter **tray widget** for Windows and Linux. Built wi
 
 - **Instant conversion** — type in either field, the other side recalculates on every keystroke; thousands grouping, both `,` and `.` accepted.
 - **Favorites** — star currencies once and they pin to the top of every dropdown, across all providers.
-- **Tray-native behavior** — left click opens the widget, right click opens the menu, clicking elsewhere hides it (with an optional stay-on-top mode).
-- **Multi-monitor aware** — optionally remembers where you dragged the window,even on a second monitor; if that monitor disappears, the widget falls back safely.
+- **Tray-native behavior** — left click toggles the widget (open/close), right click opens the menu, clicking elsewhere hides it (with an optional stay-on-top mode).
+- **Multi-monitor aware** — optionally remembers where you dragged the window, even on a second monitor; if that monitor disappears, the widget falls back safely.
 - **Two rate sources out of the box** — Central Bank of Russia and Frankfurter(ECB). Adding another API is one interface + one registry entry.
 - **Failover & offline cache** — if the selected source is down, a fallback takes over (with a visible ⚠ warning); if everything is down, today's or yesterday's cached rates still work. You always know what you are looking at.
 - **Dark & light themes**, **English & Russian UI**.
-- **Autostart** — registry on Windows, XDG autostart on Linux; the tray menuand the settings toggle stay in sync.
+- **Autostart** — registry on Windows, XDG autostart on Linux; the tray menu and the settings toggle stay in sync.
 - **Full self-uninstall** — one button removes the app, its data and the autostart entry (portable builds).
 - All app data — settings, rates cache, logs — lives in one folder; nothing is scattered across the system.
 
@@ -61,7 +61,7 @@ Linux additionally needs the dev packages listed above.
 .\build.ps1 -Archive # + zip in build\dist
 ```
 
-```Bash
+```bash
 # Linux
 WEBKIT41=1 ./build.sh   # distros shipping WebKitGTK 4.1 only (Ubuntu 22.04+)
 ```
@@ -71,7 +71,7 @@ The version comes from the `VERSION` file; icons are synced and the exe version 
 ## How it works
 **Rates freshness.** Both sources publish official rates **once per working day** (~15:30 MSK for the CBR, ~16:00 CET for the ECB). The widget polls on a configurable interval and, additionally, schedules a check right after the expected publication — so the new day's rate appears within minutes, not up to a full interval later. The badge shows `upd. HH:MM · as of DD.MM` — _when we last fetched_ and _which date the quotes are from_.
 
-**Failover & offline.** The fetch chain is: selected source → fallback sources → **local cache** (last resort, valid for one day — daily-published rates from today or yesterday are normal). When a fallback answers instead of your selected source, a ⚠ appears next to the source badge; if even the cache is too old and nothing responds, the widget shows an honest "no connection" and keeps retrying with a backoff.
+**Failover & offline.** The fetch chain is: selected source → fallback sources → **local cache** (last resort, valid for one day — daily-published rates from today or yesterday are normal). When a fallback answers instead of your selected source, a ⚠ appears next to the source badge; if even the cache is too old and nothing responds, the widget shows an honest "no connection" and keeps retrying with a backoff. Cached snapshots are kept **per source**: a pair the fallback cannot serve is still served from the cached snapshot, marked as *cached* with its quote date.
 
 **Diagnostics**
 
@@ -89,7 +89,7 @@ main.go ──► app/ (Wails bindings, lifecycle, settings API)
               ├─► rates/ rate sources behind the Provider interface
               │ (Adapter pattern + registry + disk cache)
               ├─► tray/ backend contract (backend.go) +
-              │ per-OS implementations (build tags)
+              │ per-OS implementations (self-contained Win32 on Windows, energye/D-Bus on Linux)
               ├─► popup/ Win32 window tweaks (per-OS, build tags)
               ├─► autostart/ registry / XDG (per-OS, build tags)
               └─► config/ JSON settings, atomic writes
