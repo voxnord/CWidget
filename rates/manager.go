@@ -15,11 +15,16 @@ import (
 // FetchTimeoutPerProvider is a hard limit for ONE attempt of ONE provider.
 const FetchTimeoutPerProvider = 8 * time.Second
 
-// StaleCacheAge defines how old a snapshot may be (by QuoteDate) while
-// still being servable as a cached fallback. One day fits daily-published
-// official rates: "today" and "yesterday" are both fine, anything older is
-// honestly stale.
-const StaleCacheAge = 24 * time.Hour
+// StaleCacheAge: how old a snapshot may be (by QuoteDate) while still being
+// servable as a cached fallback. FOUR days — deliberately wider than "one
+// day" to cover WEEKENDS: official rates are published once per working
+// day, so Friday's quotes (dated Saturday) are legitimately the freshest in
+// existence through Monday — up to three calendar days old. A naive 24h
+// gate refused exactly that (field report: a Monday outage sent the widget
+// offline while it was holding Friday's perfectly current rates). The quote
+// date stays visible in the header, so honesty is preserved; the gate only
+// keeps month-old garbage out.
+const StaleCacheAge = 96 * time.Hour
 
 // Registration binds a stable provider key to its implementation.
 type Registration struct {
@@ -51,31 +56,26 @@ type cacheFile struct {
 
 // Manager keeps one snapshot per provider.
 //
-// SERVING MODEL (provider-agnostic — nothing here knows about specific
-// currencies or sources):
+// SERVING MODEL (provider-agnostic — nothing here knows specific currencies
+// or sources):
 //
 //   - LIVE WINS. Any successful fetch of the selected provider (or a
-//     fallback covering the pair) is served immediately, replacing
-//     whatever was displayed — a live answer is never worse than cached
-//     data. A provider switch (SetPreferred) therefore always ends up on
-//     the newly selected source's fresh data.
+//     fallback covering the pair) is served immediately, replacing whatever
+//     was displayed.
 //   - CACHE is the fallback FOR THE SELECTED SOURCE: while the selected
-//     provider is down, ITS OWN last snapshot serves the pairs it covers
-//     (marked FromCache), until it goes stale (StaleCacheAge). A cache is
-//     never shown for a provider that is alive, and never for a pair the
-//     selected source does not cover.
-//   - FALLBACK providers serve the pairs they cover (marked Fallback) —
-//     live answers, so they beat any cache.
-//
-// The frontend refines this per pair: when the served snapshot does not
-// cover the displayed pair, it looks for a cached snapshot of another
-// source that does (pickCachedTable) — still marked, still fresh-gated.
+//     provider is down, its own last snapshot serves the pairs it covers
+//     (marked FromCache), until it goes stale (StaleCacheAge — wide enough
+//     for weekends).
+//   - On TOTAL failure (no provider answered) the freshest fresh snapshot
+//     is served as a marked copy — the preferred source's own first, then
+//     the freshest from any source. The frontend refines per pair using the
+//     full snapshot set from the payload.
 type Manager struct {
     mu        sync.RWMutex
     regs      []Registration
-    preferred string            // key of the selected provider
-    served    *Table            // last table handed out (live or cached copy)
-    snapshots map[string]*Table // per-provider snapshots (disk cache mirror)
+    preferred string                // key of the selected provider
+    served    *Table                // last table handed out (live or cached copy)
+    snapshots map[string]*Table     // per-provider snapshots (disk cache mirror)
     statuses  map[string]*ProviderStatus
     cachePath string
     busy      atomic.Bool
@@ -125,14 +125,13 @@ func (m *Manager) SetPreferred(key string) {
     m.pendingPub = time.Time{} // another source — another publication schedule
     // Reset the served view ONLY if it belongs to another provider: the UI
     // must not keep showing the previous source's data while the newly
-    // selected one is being fetched. The frontend shows its "unavailable"
-    // state until the first live answer (or the new source's cached
-    // snapshot, seeded by Current() below).
+    // selected one is being fetched. Seed from the NEW source's own cached
+    // snapshot if fresh — never from another source's.
     if m.served != nil && m.served.SourceKey != key {
         if snap := m.snapshots[key]; snap != nil && cacheIsFresh(snap) {
             cp := *snap
             cp.FromCache = true
-            m.served = &cp // seed from the NEW source's own cache — never from another source
+            m.served = &cp
         } else {
             m.served = nil // honest "fetching" state until a live answer
         }
@@ -230,10 +229,8 @@ func (m *Manager) ordered() []Registration {
 // fallbacks. EVERY successful answer immediately becomes the served table
 // (live wins — regardless of what was displayed before). A fallback's
 // snapshot is stored under ITS OWN key and never clobbers other sources'.
-// When every live provider failed, the SELECTED source's own fresh snapshot
-// serves as the cached fallback (marked); other sources' snapshots stay in
-// the store for the frontend's per-pair refinement, but the manager does
-// not present foreign-source data when the selected source is merely down.
+// When every live provider failed, the freshest fresh snapshot serves as
+// the cached fallback (marked) — see bestFreshLocked.
 func (m *Manager) TryRefresh(ctx context.Context) (*Table, error) {
     if !m.busy.CompareAndSwap(false, true) {
         if t, ok := m.Current(); ok {
@@ -280,18 +277,19 @@ func (m *Manager) TryRefresh(ctx context.Context) (*Table, error) {
         return tbl, nil
     }
 
-    // Every live provider failed. Cached fallback: the SELECTED source's
-    // OWN fresh snapshot (never another source's — a cache is bound to the
-    // provider whose data it is). Other sources' snapshots remain in the
-    // store for the frontend's per-pair refinement.
+    // Every live provider failed. Last resort: the freshest fresh snapshot —
+    // the preferred source's own first, then the freshest from any source.
+    // Served as a marked COPY (FromCache); the stored originals stay
+    // unflagged. The frontend additionally refines per pair using the full
+    // snapshot set included in the payload.
     m.mu.Lock()
-    if snap := m.snapshots[m.preferred]; snap != nil && cacheIsFresh(snap) {
-        cp := *snap
+    if cand := m.bestFreshLocked(); cand != nil {
+        cp := *cand
         cp.FromCache = true
         m.served = &cp
         m.mu.Unlock()
-        log.Printf("[rates] all providers failed — serving the selected source's cached snapshot (quotes=%s)",
-            snap.QuoteDate)
+        log.Printf("[rates] all providers failed — serving the cached snapshot from %q (quotes=%s)",
+            cand.Source, cand.QuoteDate)
         return m.served, nil
     }
     m.mu.Unlock()
@@ -302,7 +300,27 @@ func (m *Manager) TryRefresh(ctx context.Context) (*Table, error) {
     return nil, lastErr
 }
 
+// bestFreshLocked returns the preferred source's fresh snapshot, or the
+// freshest fresh snapshot from any source. QuoteDate strings are ISO dates
+// — lexicographic comparison is correct. Caller holds the lock.
+func (m *Manager) bestFreshLocked() *Table {
+    var best *Table
+    for _, t := range m.snapshots {
+        if !cacheIsFresh(t) {
+            continue
+        }
+        if t.SourceKey == m.preferred {
+            return t
+        }
+        if best == nil || t.QuoteDate > best.QuoteDate {
+            best = t
+        }
+    }
+    return best
+}
+
 // cacheIsFresh: the snapshot's quote date is within StaleCacheAge.
+// Snapshots without a QuoteDate are stale — honesty first.
 func cacheIsFresh(t *Table) bool {
     if t.QuoteDate == "" {
         return false

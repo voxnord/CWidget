@@ -71,7 +71,7 @@ The version comes from the `VERSION` file; icons are synced and the exe version 
 ## How it works
 **Rates freshness.** Both sources publish official rates **once per working day** (~15:30 MSK for the CBR, ~16:00 CET for the ECB). The widget polls on a configurable interval and, additionally, schedules a check right after the expected publication — so the new day's rate appears within minutes, not up to a full interval later. The badge shows `upd. HH:MM · as of DD.MM` — _when we last fetched_ and _which date the quotes are from_.
 
-**Failover & offline.** The fetch chain is: selected source → fallback sources → **local cache** (last resort, valid for one day — daily-published rates from today or yesterday are normal). When a fallback answers instead of your selected source, a ⚠ appears next to the source badge; if even the cache is too old and nothing responds, the widget shows an honest "no connection" and keeps retrying with a backoff. Cached snapshots are kept **per source**: a pair the fallback cannot serve is still served from the cached snapshot, marked as *cached* with its quote date.
+**Failover & offline.** The fetch chain is: selected source → fallback sources → **local cache** (last resort, valid for up to four days — daily-published rates stay current across weekends, and the quote date is always shown). When a fallback answers instead of your selected source, a ⚠ appears next to the source badge; if even the cache is too old and nothing responds, the widget shows an honest "no connection" and keeps retrying with a backoff. Cached snapshots are kept **per source**: a pair the fallback cannot serve is still served from the cached snapshot, marked as *cached* with its quote date.
 
 **Diagnostics**
 

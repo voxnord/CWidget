@@ -25,12 +25,14 @@ export function trendDir(calc) {
 }
 
 // Pick the best CACHED snapshot covering the pair: the user's preferred
-// source first, then the freshest quote date. Only snapshots within the
-// one-day freshness window count (same rule as the backend's serving).
+// source first, then the freshest quote date. The freshness gate mirrors
+// the backend's StaleCacheAge (4 days): daily-published official rates stay
+// legitimately current across weekends (Friday's quotes through Monday),
+// so the gate must not reject them.
 export function pickCachedTable(a, b) {
-  const yday = new Date();
-  yday.setDate(yday.getDate() - 1);
-  const minDate = yday.toISOString().slice(0, 10);
+  const min = new Date();
+  min.setDate(min.getDate() - 4);
+  const minDate = min.toISOString().slice(0, 10);
   let best = null;
   for (const tbl of S.tables ?? []) {
     if (!tbl || !pairIn(tbl, a, b)) continue;
